@@ -149,31 +149,57 @@ class PACFile(AudioFile):
         return myParams
 
 
-    def ReadDataBlock(self, codingParams):
+    def ReadDataBlock(self, codingParams, entropy_block=False):
         """
         Reads a block of coded data from a PACFile object that has already
         executed OpenForReading() and returns those samples as reconstituted
         signed-fraction data
         """
+        if entropy_block:
+            decompressed_block = b''
+            for iCh in range(codingParams.nChannels):
+                s=self.fp.read(calcsize("<L"))
+                if not s:
+                    if codingParams.overlapAndAdd:
+                        overlapAndAdd=codingParams.overlapAndAdd
+                        codingParams.overlapAndAdd=0  # setting it to zero so next pass will just return
+                        return overlapAndAdd
+                    else:
+                        return
+                nBytes = unpack("<L",s)[0]
+                compressed_data = self.fp.read(nBytes)
+                decompressed_block += gzip.decompress(compressed_data)
+            # print(f'decompressed block: {decompressed_block}')
         # loop over channels (whose coded data are stored separately) and read in each data block
         data=[]
         for iCh in range(codingParams.nChannels):
             data.append(np.array([],dtype=np.float64))  # add location for this channel's data
             # read in string containing the number of bytes of data for this channel (but check if at end of file!)
-            s=self.fp.read(calcsize("<L"))  # will be empty if at end of file
+            if entropy_block:
+                s = decompressed_block[:calcsize("<L")]
+                decompressed_block = decompressed_block[calcsize("<L"):]
+            else:
+                s=self.fp.read(calcsize("<L")) # will be empty if at end of file
             if not s:
-                # hit last block, see if final overlap and add needs returning, else return nothing
-                if codingParams.overlapAndAdd:
-                    overlapAndAdd=codingParams.overlapAndAdd
-                    codingParams.overlapAndAdd=0  # setting it to zero so next pass will just return
-                    return overlapAndAdd
+                if entropy_block:
+                    return data
                 else:
-                    return
+                # hit last block, see if final overlap and add needs returning, else return nothing
+                    if codingParams.overlapAndAdd:
+                        overlapAndAdd=codingParams.overlapAndAdd
+                        codingParams.overlapAndAdd=0  # setting it to zero so next pass will just return
+                        return overlapAndAdd
+                    else:
+                        return
             # not at end of file, get nBytes from the string we just read
             nBytes = unpack("<L",s)[0] # read it as a little-endian unsigned long
             # read the nBytes of data into a PackedBits object to unpack
             pb = PackedBits()
-            pb.SetPackedData( self.fp.read(nBytes) ) # PackedBits function SetPackedData() converts strings to internally-held array of bytes
+            if entropy_block:
+                pb.SetPackedData(decompressed_block[:nBytes])
+                decompressed_block = decompressed_block[nBytes:]
+            else:
+                pb.SetPackedData( self.fp.read(nBytes) ) # PackedBits function SetPackedData() converts strings to internally-held array of bytes
             if pb.nBytes < nBytes:  raise "Only read a partial block of coded PACFile data"
 
             # extract the data from the PackedBits object
@@ -201,7 +227,6 @@ class PACFile(AudioFile):
             decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
             data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
             codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
-
         # end loop over channels, return signed-fraction samples for this block
         return data
 
@@ -240,7 +265,7 @@ class PACFile(AudioFile):
         return
 
 
-    def WriteDataBlock(self,data, codingParams):
+    def WriteDataBlock(self,data, codingParams, entropy_block=False):
         """
         Writes a block of signed-fraction data to a PACFile object that has
         already executed OpenForWriting()"""
@@ -272,7 +297,7 @@ class PACFile(AudioFile):
             # now convert the bits to bytes (w/ extra one if spillover beyond byte boundary)
             if nBytes%BYTESIZE==0:  nBytes //= BYTESIZE
             else: nBytes = nBytes//BYTESIZE + 1
-            self.fp.write(pack("<L",int(nBytes))) # stores size as a little-endian unsigned long
+            # self.fp.write(pack("<L",int(nBytes))) # stores size as a little-endian unsigned long
 
             # create a PackedBits object to hold the nBytes of data for this channel/block of coded data
             pb = PackedBits()
@@ -296,11 +321,15 @@ class PACFile(AudioFile):
             # < now can add in custom data if space allocated in nBytes above>
 
             # finally, write the data in this channel's PackedBits object to the output file
-            self.fp.write(pb.GetPackedData())
+            if entropy_block:
+                compressed_data = gzip.compress(pack("<L",int(nBytes)) + pb.GetPackedData())
+                self.fp.write(pack("<L",len(compressed_data)) + compressed_data)
+            else:
+                self.fp.write(pack("<L",int(nBytes)) + pb.GetPackedData())
         # end loop over channels, done writing coded data for all channels
         return
 
-    def Close(self,codingParams):
+    def Close(self,codingParams,entropy_block=False):
         """
         Flushes the last data block through the encoding process (if encoding)
         and closes the audio file
@@ -310,7 +339,7 @@ class PACFile(AudioFile):
             # we are writing the coded file -- pass a block of zeros to move last data block to other side of MDCT block
             data = [ np.zeros(codingParams.nMDCTLines,dtype=np.float64),
                      np.zeros(codingParams.nMDCTLines,dtype=np.float64) ]
-            self.WriteDataBlock(data, codingParams)
+            self.WriteDataBlock(data, codingParams, entropy_block=entropy_block)
         self.fp.close()
 
 
@@ -343,23 +372,36 @@ class PACFile(AudioFile):
 # Testing the full PAC coder (needs a file called "input.wav" in the code directory)
 if __name__=="__main__":
 
+    import argparse
+    parser = argparse.ArgumentParser(description="PAC coder for encoding and decoding audio files.")
+    # parser.add_argument("direction", choices=["Encode", "Decode"], help="Direction of processing: Encode or Decode")
+    parser.add_argument("--input_file", help="Input file path")
+    parser.add_argument("--entropy_coding", choices=["block", "full", None], default=None, help="Type of entropy coding to use")
+    args = parser.parse_args()
+
     print( "\nTesting the PAC coder (input.wav -> coded.pac -> output.wav):")
     import time
     from pcmfile import * # to get access to WAV file handling
+    import gzip, shutil
     elapsed = time.time()
 
+    in_file = args.input_file
+    out_encode = in_file.replace(".wav", "_192kbps.pac")
+    in_decode = in_file.replace(".wav", "_192kbps_unzip.pac") if args.entropy_coding == 'full' else out_encode
+    out_file = in_file.replace(".wav", "_192kbps.wav")
+
     for Direction in ("Encode", "Decode"):
-#    for Direction in ("Decode",):
+    # for Direction in ("Decode",):
 
         # create the audio file objects
         if Direction == "Encode":
             print( "\n\tEncoding input PCM file...",)
-            inFile= PCMFile("test-items/spgm.wav")
-            outFile = PACFile("test-items/spgm_192kbps.pac")
+            inFile= PCMFile(in_file)
+            outFile = PACFile(out_encode)
         else: # "Decode"
             print( "\n\tDecoding coded PAC file...",)
-            inFile = PACFile("test-items/spgm_192kbps.pac")
-            outFile= PCMFile("test-items/spgm_192kbps.wav")
+            inFile = PACFile(in_decode)
+            outFile= PCMFile(out_file)
         # only difference is file names and type of AudioFile object
 
         # open input file
@@ -386,15 +428,37 @@ if __name__=="__main__":
 
         # Read the input file and pass its data to the output file to be written
         while True:
-            data=inFile.ReadDataBlock(codingParams)
+            if Direction == "Decode" and args.entropy_coding == "block":
+                data=inFile.ReadDataBlock(codingParams, entropy_block=True)
+            else:
+                data=inFile.ReadDataBlock(codingParams)
             if not data: break  # we hit the end of the input file
-            outFile.WriteDataBlock(data,codingParams)
+            if Direction == "Encode" and args.entropy_coding == "block":
+                outFile.WriteDataBlock(data,codingParams, entropy_block=True)
+            else:
+                outFile.WriteDataBlock(data,codingParams)
             print( ".",end="")  # just to signal how far we've gotten to user
         # end loop over reading/writing the blocks
 
         # close the files
-        inFile.Close(codingParams)
-        outFile.Close(codingParams)
+        if Direction == "Decode" and args.entropy_coding == "block":
+            inFile.Close(codingParams, entropy_block=True)
+        else:
+            inFile.Close(codingParams)
+        
+        if Direction == "Encode" and args.entropy_coding == "block":
+            outFile.Close(codingParams, entropy_block=True)
+        else:
+            outFile.Close(codingParams)
+
+        if Direction == "Encode" and args.entropy_coding == "full":
+            # entropy encoding 
+            with open(out_encode, 'rb') as f_in, gzip.open(out_encode + '.gz', 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+
+            # entropy decoding
+            with gzip.open(out_encode + '.gz', 'rb') as f_in, open(in_decode, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
     # end of loop over Encode/Decode
 
     elapsed = time.time()-elapsed
