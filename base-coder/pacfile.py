@@ -155,52 +155,31 @@ class PACFile(AudioFile):
         executed OpenForReading() and returns those samples as reconstituted
         signed-fraction data
         """
-        if entropy_block:
-            decompressed_block = b''
-            for iCh in range(codingParams.nChannels):
-                s=self.fp.read(calcsize("<L"))
-                if not s:
-                    if codingParams.overlapAndAdd:
-                        overlapAndAdd=codingParams.overlapAndAdd
-                        codingParams.overlapAndAdd=0  # setting it to zero so next pass will just return
-                        return overlapAndAdd
-                    else:
-                        return
-                nBytes = unpack("<L",s)[0]
-                compressed_data = self.fp.read(nBytes)
-                decompressed_block += gzip.decompress(compressed_data)
-            # print(f'decompressed block: {decompressed_block}')
         # loop over channels (whose coded data are stored separately) and read in each data block
         data=[]
         for iCh in range(codingParams.nChannels):
             data.append(np.array([],dtype=np.float64))  # add location for this channel's data
             # read in string containing the number of bytes of data for this channel (but check if at end of file!)
-            if entropy_block:
-                s = decompressed_block[:calcsize("<L")]
-                decompressed_block = decompressed_block[calcsize("<L"):]
-            else:
-                s=self.fp.read(calcsize("<L")) # will be empty if at end of file
+            s=self.fp.read(calcsize("<L")) # will be empty if at end of file
             if not s:
-                if entropy_block:
-                    return data
-                else:
                 # hit last block, see if final overlap and add needs returning, else return nothing
-                    if codingParams.overlapAndAdd:
-                        overlapAndAdd=codingParams.overlapAndAdd
-                        codingParams.overlapAndAdd=0  # setting it to zero so next pass will just return
-                        return overlapAndAdd
-                    else:
-                        return
+                if codingParams.overlapAndAdd:
+                    overlapAndAdd=codingParams.overlapAndAdd
+                    codingParams.overlapAndAdd=0  # setting it to zero so next pass will just return
+                    return overlapAndAdd
+                else:
+                    return
             # not at end of file, get nBytes from the string we just read
             nBytes = unpack("<L",s)[0] # read it as a little-endian unsigned long
             # read the nBytes of data into a PackedBits object to unpack
             pb = PackedBits()
             if entropy_block:
-                pb.SetPackedData(decompressed_block[:nBytes])
-                decompressed_block = decompressed_block[nBytes:]
+                compressed_data = self.fp.read(nBytes)
+                decompressed_block = gzip.decompress(compressed_data)
+                pb.SetPackedData(decompressed_block)
             else:
                 pb.SetPackedData( self.fp.read(nBytes) ) # PackedBits function SetPackedData() converts strings to internally-held array of bytes
-            if pb.nBytes < nBytes:  raise "Only read a partial block of coded PACFile data"
+                if pb.nBytes < nBytes:  raise "Only read a partial block of coded PACFile data"
 
             # extract the data from the PackedBits object
             overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
@@ -322,7 +301,7 @@ class PACFile(AudioFile):
 
             # finally, write the data in this channel's PackedBits object to the output file
             if entropy_block:
-                compressed_data = gzip.compress(pack("<L",int(nBytes)) + pb.GetPackedData())
+                compressed_data = gzip.compress(pb.GetPackedData())
                 self.fp.write(pack("<L",len(compressed_data)) + compressed_data)
             else:
                 self.fp.write(pack("<L",int(nBytes)) + pb.GetPackedData())
