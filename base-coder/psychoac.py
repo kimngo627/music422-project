@@ -87,8 +87,9 @@ class Masker:
 
 # Default data for 25 scale factor bands based on the traditional 25 critical bands
 cbFreqLimits = np.array([100, 200, 300, 400, 510, 630, 770, 920, 1080, 1270, 1480, 1720, 2000,
-    2320, 2700, 3150, 3700, 4400, 5300, 6400, 7700, 9500, 12000, 15500, 24000])  # TO REPLACE WITH THE APPROPRIATE VALUES
-
+    2320, 2700, 3150, 3700, 4400, 5300, 6400, 7700, 9500, 12000, 15500, 22000])  # TO REPLACE WITH THE APPROPRIATE VALUES
+short_cbFreqLimits = np.array([100.,  3228.57142857,  6357.14285714,  9485.71428571,
+       12614.28571429, 15742.85714286, 18871.42857143, 22000.])
 def AssignMDCTLinesFromFreqLimits(nMDCTLines, sampleRate, flimit = cbFreqLimits):
     """
     Assigns MDCT lines to scale factor bands for given sample rate and number

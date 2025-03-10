@@ -85,7 +85,7 @@ def EncodeSingleChannel(data,codingParams):
 
     # window data for side chain FFT and also window and compute MDCT
     timeSamples = data
-    mdctTimeSamples = SineWindow(data)
+    mdctTimeSamples = SineWindow(data) # TODO block switching
     mdctLines = MDCT(mdctTimeSamples, halfN, halfN)[:halfN]
 
     # compute overall scale factor for this block and boost mdctLines using it

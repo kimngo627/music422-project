@@ -70,6 +70,7 @@ class AudioFile:
         """Opens the file for writing output data and writes the file Header (getting info from passed CodingParams object attributes as needed)"""
         self.fp = open(self.filename,"wb")
         self.WriteFileHeader(codingParams)  # this writes the file header and leaves the file pointer at the start of data portion
+        print(f"inside openforwriting: {codingParams.secretMessage}")
 
     def Close(self,codingParams):
         """Closes the audio file and does any needed end-of-coding steps"""

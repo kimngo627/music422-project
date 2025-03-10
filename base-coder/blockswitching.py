@@ -20,7 +20,7 @@ def HanningWindowFunc(N):
     '''N is length of the window'''
     return 0.5 * (1 - np.cos(2 * np.pi * (np.arange(N) + 0.5) / N))
 
-def TransitionWindow(dataSampleArray, window, longLen, shortLen, start=True):
+def TransitionWindow(dataSampleArray, window, longLen, shortLen, start=True, short=False):
     '''
     See pg 123 in the book.
     Returns a copy of the dataSampleArray transition-windowed.
@@ -37,11 +37,13 @@ def TransitionWindow(dataSampleArray, window, longLen, shortLen, start=True):
     N = len(dataSampleArray) 
     halfLongLen = longLen//2
     halfShortLen = shortLen//2
-    print(f"start? {start} N: {N}, halfLongLen: {halfLongLen}, halfShortLen: {halfShortLen}")
+    # print(f"start? {start} N: {N}, halfLongLen: {halfLongLen}, halfShortLen: {halfShortLen}")
     if (N < halfLongLen):
         print("not enough data samples to window with half LONG window")
     elif (N < halfShortLen):
         print("not enough data samples to window with half SHORT window")
+    if (short):
+        return window(shortLen) * dataSampleArray
     if (start):   #half long on left, half short on right
         halfLongWindowed = window(longLen)[:halfLongLen] * dataSampleArray[:halfLongLen]
         ind = halfLongLen-halfShortLen # index at where the short window starts
@@ -91,57 +93,61 @@ if __name__ == "__main__":
     shortN = N//2
     # short_x_firsthalf = np.cos(2 * np.pi * 7000 * np.arange(shortN) / 44100)
     # short_x_sechalf = np.cos(2 * np.pi * 7000 * np.arange(shortN, shortN+N//2) / 44100)
-    short_x_firsthalf = [1]*(N//2)
-    short_x_sechalf = [1]*(N//2)
+    short_x_half = [1]*(N//2)
     ones = [1]*N
     ############################ Testing Transition Window Implementation ############################
+    # usually don't use hanning window for transition window, use it for fft
+    # x_hann = HanningWindow(ones)
+    # short_x_hann = np.concat((HanningWindow(short_x_firsthalf), HanningWindow(short_x_sechalf)))
+    # x_hann_transition_start = TransitionWindow(ones, HanningWindowFunc, N//2, N//4, True)
+    # x_hann_transition_stop = TransitionWindow(ones, HanningWindowFunc, N//2, N//4, False)
+    # plt.plot(x_hann, label="Long Hann Window")
+    # plt.plot(short_x_hann, label="Short Hann Window")
+    # plt.plot(x_hann_transition_start, label="Start Transition Hanning Window Ones")
+    # plt.plot(x_hann_transition_stop, label="Stop Transition Hanning Window")
+
     x_sine = SineWindow(ones)
-    x_hann = HanningWindow(ones)
-    short_x_sine = np.concat((SineWindow(short_x_firsthalf) , SineWindow(short_x_sechalf)))
-    short_x_hann = np.concat((HanningWindow(short_x_firsthalf), HanningWindow(short_x_sechalf)))
+    short_x_sine = np.concat((SineWindow(short_x_half) , SineWindow(short_x_half)))
     x_sine_transition_start = TransitionWindow(ones, SineWindowFunc, N//2, N//4, True)
-    x_hann_transition_start = TransitionWindow(ones, HanningWindowFunc, N//2, N//4, True)
-
     x_sine_transition_stop = TransitionWindow(ones, SineWindowFunc, N//2, N//4, False)
-    x_hann_transition_stop = TransitionWindow(ones, HanningWindowFunc, N//2, N//4, False)
-
+    
     plt.figure(figsize=(12, 10))
     plt.subplot(2, 1, 1)
     plt.title("Regular Long Windows")
     plt.plot(x_sine, label="Long Sine Window")
-    plt.plot(x_hann, label="Long Hann Window")
+    
     plt.subplot(2, 1, 2)
     plt.title("Regular Short Windows")
     plt.plot(short_x_sine, label="Short Sine Window")
-    plt.plot(short_x_hann, label="Short Hann Window")
+    
     plt.xlabel('Time (samples)')
     plt.ylabel('Magnitude')
     plt.legend()
-    plt.savefig('Long vs Short Window Ones')
+    plt.savefig('Long vs Short Window')
     plt.show()
 
     plt.figure(figsize=(12, 10))
     plt.subplot(3, 1, 1)
     plt.title("Regular Long Windows")
     plt.plot(x_sine, label="Regular Sine Window")
-    plt.plot(x_hann, label="Regular Hann Window")
+    
     plt.subplot(3, 1, 2)
-    plt.plot(x_sine_transition_start, label="Start Transition Sine Window Ones")
-    plt.plot(x_hann_transition_start, label="Start Transition Hanning Window Ones")
-    plt.title("Start Windows in Time Domain")
+    plt.plot(x_sine_transition_start, label="Start Transition Sine Window")
+    plt.title("Start Window in Time Domain")
+    plt.axvline(x=N//4, color='grey', linestyle='--', label=f'{N//4}')
     plt.legend()
 
     plt.subplot(3, 1, 3)
     plt.plot(x_sine_transition_stop, label="Stop Transition Sine Window")
-    plt.plot(x_hann_transition_stop, label="Stop Transition Hanning Window")
-    plt.title('Stop Windows in Time Domain')
+    plt.title('Stop Window in Time Domain')
+    plt.axvline(x=N//4//2, color='grey', linestyle='--', label=f'{N//8}')
     plt.xlabel('Time (samples)')
     plt.ylabel('Magnitude')
     plt.legend()
     plt.subplots_adjust(wspace=0.4, hspace=0.4)  # Adjust values as needed
     plt.savefig('Transition Windows Ones') 
     plt.show()
-    ################################################################################################
+    ####################################### windowing on signal x #######################################
     # x_sine = SineWindow(x)
     # x_hann = HanningWindow(x)
     # short_x_sine = np.concat((SineWindow(short_x_firsthalf) , SineWindow(short_x_sechalf)))
