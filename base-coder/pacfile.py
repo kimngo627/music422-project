@@ -196,7 +196,10 @@ class PACFile(AudioFile):
 
             # CUSTOM DATA:
             # < now can unpack any custom data passed in the nBytes of data > # TODO: specific instructions for this block? 
-
+            # block type
+            # binary for block type
+            # 0b00 = regular long, 0b01 = short, 0b10 = start, 0b11 = stop
+            codingParams.blockType = bin(0)
             # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
             decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
             data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
@@ -229,7 +232,7 @@ class PACFile(AudioFile):
         sfBands=ScaleFactorBands( AssignMDCTLinesFromFreqLimits(codingParams.nMDCTLines,    #TODO change number of mdctlines?
                                                                 codingParams.sampleRate)
                                 )
-        codingParams.secretMessage = "writing file header secret message"
+        # codingParams.secretMessage = "writing file header secret message"
         codingParams.sfBands=sfBands
         self.fp.write(pack('<L',sfBands.nBands))
         self.fp.write(pack('<'+str(sfBands.nBands)+'H',*(sfBands.nLines.tolist()) ))
@@ -295,7 +298,7 @@ class PACFile(AudioFile):
 
             # CUSTOM DATA:
             # < now can add in custom data if space allocated in nBytes above>  # TODO for specific instructions on block? 
-            codingParams.secretMessage = "DATA BLOCK WRITING. BYE"
+            # codingParams.secretMessage = "DATA BLOCK WRITING. BYE"
             
             # finally, write the data in this channel's PackedBits object to the output file
             self.fp.write(pb.GetPackedData())
@@ -371,7 +374,7 @@ if __name__=="__main__":
         if Direction == "Encode":
             # set additional parameters that are needed for PAC file
             # (beyond those set by the PCM file on open)
-            codingParams.secretMessage = "starting encode"
+            # codingParams.secretMessage = "starting encode"
             codingParams.nMDCTLines = 1024                              # TODO: this will change somehow? 
             codingParams.nScaleBits = 3
             codingParams.nMantSizeBits = 5
@@ -380,7 +383,7 @@ if __name__=="__main__":
             codingParams.nSamplesPerBlock = codingParams.nMDCTLines   
         else: # "Decode"
             # set PCM parameters (the rest is same as set by PAC file on open)
-            codingParams.secretMessage = "starting decode"
+            # codingParams.secretMessage = "starting decode"
             codingParams.bitsPerSample = 16
         # only difference is in setting up the output file parameters
 
