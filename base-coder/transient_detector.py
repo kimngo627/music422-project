@@ -144,7 +144,7 @@ if __name__ == "__main__":
     long_block_size = 1024
     short_block_size = 128
     hop_size = long_block_size // 2
-    start_block = 115
+    start_block = 120
     end_block = 125
     
     start_sample = start_block * hop_size
@@ -184,12 +184,10 @@ if __name__ == "__main__":
             next_block = audio[next_block_start:next_block_end]
         
         is_transient = detector.detect(next_block, sr)
-        if is_transient:
-            transient_positions.append(next_block_start - start_sample)  
         
         block_type = detector.get_block_type(next_block, sr)
         block_types.append(block_type)
-        print(f"Block {i}: {block_type.name}, Transient: {is_transient}")
+        print(f"Block {i}: {block_type.name}, Transient: {is_transient}, Position: {block_start, block_end}")
     
     plt.figure(figsize=(15, 6))
     
@@ -206,49 +204,48 @@ if __name__ == "__main__":
         if wtype == BlockType.LONG:
             window_values = SineWindowFunc(long_block_size)
             window_label = "Long Window"
+            windows.append((window_values, window_label))
+            window_positions.append(block_pos)
             
         elif wtype == BlockType.SHORT:
-            window_values = np.zeros(long_block_size)
-            for j in range(long_block_size // short_block_size):
-                short_start_idx = j * short_block_size // 2
-                short_end_idx = min(short_start_idx + short_block_size, long_block_size)
-                if short_end_idx <= short_start_idx:
-                    continue
-                
-                short_window = SineWindowFunc(short_block_size)
-                short_length = short_end_idx - short_start_idx
-                window_values[short_start_idx:short_end_idx] = short_window[:short_length]
-            window_label = "Short Windows"
+            #window_values = np.zeros(long_block_size)
+            for j in range((long_block_size // short_block_size) * 2 - 1):
+                ones_array = np.ones(short_block_size)
+                window_values = SineWindowFunc(short_block_size)
+                window_label = "Short Windows"
+                windows.append((window_values, window_label))
+                if j > 0:
+                    block_pos += short_block_size // 2
+                print(j)
+                print(block_pos)
+                window_positions.append(block_pos)
             
         elif wtype == BlockType.START:
             ones_array = np.ones(long_block_size)
             window_values = TransitionWindow(ones_array, SineWindowFunc, long_block_size, short_block_size, start=True)
             window_label = "Start Transition"
+            windows.append((window_values, window_label))
+            window_positions.append(block_pos)
             
         elif wtype == BlockType.STOP:
             ones_array = np.ones(long_block_size)
             window_values = TransitionWindow(ones_array, SineWindowFunc, long_block_size, short_block_size, start=False)
             window_label = "Stop Transition"
-            
-        windows.append((window_values, window_label))
-        window_positions.append(block_pos)
+            block_pos += hop_size - (short_block_size // 2)
+            windows.append((window_values, window_label))
+            window_positions.append(block_pos)
     
     used_labels = set()
     
     for i, ((window_values, label), position) in enumerate(zip(windows, window_positions)):
         window_time = np.arange(position, position + len(window_values)) / sr
+        print(position, position + len(window_values))
         
-        plt.plot(window_time, window_values, alpha=0.7)
+        plt.plot(window_time, window_values, alpha=0.7, color='r')
     
-    for pos in transient_positions:
-        pos_time = pos / sr
-        plt.plot(pos_time, 0.9, 'ro', markersize=8, label='Transient' if 'Transient' not in used_labels else "")
-        used_labels.add('Transient')
-    
-    plt.title("Window Shapes During Block Switching (Blocks {}-{})".format(start_block, end_block))
+    plt.title("Window Shapes During Block Switching (Castanets)")
     plt.xlabel("Time (seconds)")
     plt.ylabel("Amplitude")
-    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
