@@ -145,7 +145,7 @@ if __name__ == "__main__":
     short_block_size = 128
     hop_size = long_block_size // 2
     start_block = 120
-    end_block = 125
+    end_block = 124
     
     start_sample = start_block * hop_size
     end_sample = (end_block + 2) * hop_size 
@@ -216,8 +216,6 @@ if __name__ == "__main__":
                 windows.append((window_values, window_label))
                 if j > 0:
                     block_pos += short_block_size // 2
-                print(j)
-                print(block_pos)
                 window_positions.append(block_pos)
             
         elif wtype == BlockType.START:
@@ -239,7 +237,6 @@ if __name__ == "__main__":
     
     for i, ((window_values, label), position) in enumerate(zip(windows, window_positions)):
         window_time = np.arange(position, position + len(window_values)) / sr
-        print(position, position + len(window_values))
         
         plt.plot(window_time, window_values, alpha=0.7, color='r')
     

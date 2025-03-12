@@ -125,6 +125,14 @@ MAX16BITS = 32767
 from transient_detector import *
 SR = 44100
 
+# binary used for keeping track of what kind of block should be used
+LONG  = bin(0)
+START = bin(1)
+SHORT = bin(2)
+STOP  = bin(3)
+
+N = 1024
+
 class PACFile(AudioFile):
     """
     Handlers for a perceptually coded audio file I am encoding/decoding
@@ -191,32 +199,72 @@ class PACFile(AudioFile):
             pb.SetPackedData( self.fp.read(nBytes) ) # PackedBits function SetPackedData() converts strings to internally-held array of bytes
             if pb.nBytes < nBytes:  raise "Only read a partial block of coded PACFile data"
 
-            # extract the data from the PackedBits object
-            overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
-            scaleFactor=[]
-            bitAlloc=[]
-            mantissa=np.zeros(codingParams.nMDCTLines,np.int32)  # start w/ all mantissas zero
-            for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
-                ba = pb.ReadBits(codingParams.nMantSizeBits)
-                if ba: ba+=1  # no bit allocation of 1 so ba of 2 and up stored as one less
-                bitAlloc.append(ba)  # bit allocation for this band
-                scaleFactor.append(pb.ReadBits(codingParams.nScaleBits))  # scale factor for this band
-                if bitAlloc[iBand]:
-                    # if bits allocated, extract those mantissas and put in correct location in matnissa array
-                    m=np.empty(codingParams.sfBands.nLines[iBand],np.int32)
-                    for j in range(codingParams.sfBands.nLines[iBand]):
-                        m[j]=pb.ReadBits(bitAlloc[iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so encoded as 1 lower than actual allocation
-                    mantissa[codingParams.sfBands.lowerLine[iBand]:(codingParams.sfBands.upperLine[iBand]+1)] = m
-            # done unpacking data (end loop over scale factor bands)
+            # Read block type (2 bits)
+            blockType_bits = pb.ReadBits(2)
+            if blockType_bits == 0:
+                codingParams.currBlockType = LONG    # 00 = LONG
+            elif blockType_bits == 1:
+                codingParams.currBlockType = SHORT   # 01 = SHORT
+            elif blockType_bits == 2:
+                codingParams.currBlockType = START   # 10 = START
+            elif blockType_bits == 3:
+                codingParams.currBlockType = STOP    # 11 = STOP
 
-            # CUSTOM DATA:
-            # < now can unpack any custom data passed in the nBytes of data > 
-            # block type
-            
-            # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
-            decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
-            data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
-            codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
+            # extract the data from the PackedBits object
+            if codingParams.currBlockType == SHORT:
+                # TODO: Modify the following code to loop through and read short blocks one by one
+                overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
+                scaleFactor=[]
+                bitAlloc=[]
+                mantissa=np.zeros(codingParams.nMDCTLines,np.int32)  # start w/ all mantissas zero
+                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                    ba = pb.ReadBits(codingParams.nMantSizeBits)
+                    if ba: ba+=1  # no bit allocation of 1 so ba of 2 and up stored as one less
+                    bitAlloc.append(ba)  # bit allocation for this band
+                    scaleFactor.append(pb.ReadBits(codingParams.nScaleBits))  # scale factor for this band
+                    if bitAlloc[iBand]:
+                        # if bits allocated, extract those mantissas and put in correct location in matnissa array
+                        m=np.empty(codingParams.sfBands.nLines[iBand],np.int32)
+                        for j in range(codingParams.sfBands.nLines[iBand]):
+                            m[j]=pb.ReadBits(bitAlloc[iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so encoded as 1 lower than actual allocation
+                        mantissa[codingParams.sfBands.lowerLine[iBand]:(codingParams.sfBands.upperLine[iBand]+1)] = m
+                # done unpacking data (end loop over scale factor bands)
+
+                # CUSTOM DATA:
+                # < now can unpack any custom data passed in the nBytes of data > 
+                # block type
+                
+                # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
+                decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
+                data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
+                codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
+
+            else:
+                overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
+                scaleFactor=[]
+                bitAlloc=[]
+                mantissa=np.zeros(codingParams.nMDCTLines,np.int32)  # start w/ all mantissas zero
+                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                    ba = pb.ReadBits(codingParams.nMantSizeBits)
+                    if ba: ba+=1  # no bit allocation of 1 so ba of 2 and up stored as one less
+                    bitAlloc.append(ba)  # bit allocation for this band
+                    scaleFactor.append(pb.ReadBits(codingParams.nScaleBits))  # scale factor for this band
+                    if bitAlloc[iBand]:
+                        # if bits allocated, extract those mantissas and put in correct location in matnissa array
+                        m=np.empty(codingParams.sfBands.nLines[iBand],np.int32)
+                        for j in range(codingParams.sfBands.nLines[iBand]):
+                            m[j]=pb.ReadBits(bitAlloc[iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so encoded as 1 lower than actual allocation
+                        mantissa[codingParams.sfBands.lowerLine[iBand]:(codingParams.sfBands.upperLine[iBand]+1)] = m
+                # done unpacking data (end loop over scale factor bands)
+
+                # CUSTOM DATA:
+                # < now can unpack any custom data passed in the nBytes of data > 
+                # block type
+                
+                # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
+                decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
+                data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
+                codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
 
         # end loop over channels, return signed-fraction samples for this block
         return data
@@ -280,10 +328,30 @@ class PACFile(AudioFile):
         codingParams.priorBlock = data  # current pass's data is next pass's prior block data
 
         # we want to first start off detecting for transience in next block
-        next_block = inFile.ReadDataBlock(codingParams) 
-        is_transient = detector.detect(next_block, SR)
-        # save the block type for next pass
-        codingParams.blockType = detector.get_block_type(next_block, sr)
+        next_block = inFile.ReadDataBlock(codingParams)
+        if next_block:
+
+            is_transient = detector.detect(next_block[0], SR)
+
+            if hasattr(codingParams, 'blockState'):
+                next_block_type = codingParams.blockState.update(is_transient)
+            else:
+                if codingParams.currBlockType == LONG and is_transient:
+                    next_block_type = START
+                elif codingParams.currBlockType == START:
+                    next_block_type = SHORT
+                elif codingParams.currBlockType == SHORT and is_transient:
+                    next_block_type = SHORT
+                elif codingParams.currBlockType == SHORT and not is_transient:
+                    next_block_type = STOP
+                elif codingParams.currBlockType == STOP:
+                    next_block_type = LONG
+                else:
+                    next_block_type = LONG
+
+            codingParams.nextBlockType = next_block_type
+        else:
+            codingParams.nextBlockType = LONG
 
         # add in logic for if we are at short block[14] (the last one), check if the next block should be stop block or short block?
         # if priorBlockType = start and currBlockType = short, shortBlockInd = 0
@@ -300,11 +368,23 @@ class PACFile(AudioFile):
 
             # determine the size of this channel's data block and write it to the output file
             nBytes =codingParams.nScaleBits  # bits for overall scale factor
-            for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to get its bits
-                nBytes += codingParams.nMantSizeBits+codingParams.nScaleBits    # mantissa bit allocation and scale factor for that sf band
-                if bitAlloc[iCh][iBand]:
-                    # if non-zero bit allocation for this band, add in bits for scale factor and each mantissa (0 bits means zero)
-                    nBytes += bitAlloc[iCh][iBand]*codingParams.sfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
+            # Add 2 bits for block type information
+            nBytes += 2
+
+            if codingParams.currBlockType == SHORT:
+                num_short_blocks = 15
+                for i in range(num_short_blocks):
+                    for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to get its bits
+                        nBytes += codingParams.nMantSizeBits+codingParams.nScaleBits    # mantissa bit allocation and scale factor for that sf band
+                        if bitAlloc[iCh][i][iBand]:
+                            # if non-zero bit allocation for this band, add in bits for scale factor and each mantissa (0 bits means zero)
+                            nBytes += bitAlloc[iCh][i][iBand]*codingParams.sfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
+            else:
+                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to get its bits
+                    nBytes += codingParams.nMantSizeBits+codingParams.nScaleBits    # mantissa bit allocation and scale factor for that sf band
+                    if bitAlloc[iCh][iBand]:
+                        # if non-zero bit allocation for this band, add in bits for scale factor and each mantissa (0 bits means zero)
+                        nBytes += bitAlloc[iCh][iBand]*codingParams.sfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
             # end computing bits needed for this channel's data
 
             # CUSTOM DATA:
@@ -319,18 +399,45 @@ class PACFile(AudioFile):
             pb = PackedBits()
             pb.Size(nBytes)
 
-            # now pack the nBytes of data into the PackedBits object
-            pb.WriteBits(overallScaleFactor[iCh],codingParams.nScaleBits)  # overall scale factor
-            iMant=0  # index offset in mantissa array (because mantissas w/ zero bits are omitted)
-            for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
-                ba = bitAlloc[iCh][iBand]
-                if ba: ba-=1  # if non-zero, store as one less (since no bit allocation of 1 bits/mantissa)
-                pb.WriteBits(ba,codingParams.nMantSizeBits)  # bit allocation for this band (written as one less if non-zero)
-                pb.WriteBits(scaleFactor[iCh][iBand],codingParams.nScaleBits)  # scale factor for this band (if bit allocation non-zero)
-                if bitAlloc[iCh][iBand]:
-                    for j in range(codingParams.sfBands.nLines[iBand]):
-                        pb.WriteBits(mantissa[iCh][iMant+j],bitAlloc[iCh][iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so is 1 higher than the number
-                    iMant += codingParams.sfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
+            # Write block type information (2 bits)
+            if codingParams.currBlockType == LONG:
+                pb.WriteBits(0, 2)  # 00 = LONG
+            elif codingParams.currBlockType == START:
+                pb.WriteBits(2, 2)  # 10 = START
+            elif codingParams.currBlockType == SHORT:
+                pb.WriteBits(1, 2)  # 01 = SHORT
+            elif codingParams.currBlockType == STOP:
+                pb.WriteBits(3, 2)  # 11 = STOP
+
+            if codingParams.currBlockType == SHORT:
+                num_short_blocks = 15
+
+                for i in range(num_short_blocks):
+                    # now pack the nBytes of data into the PackedBits object
+                    pb.WriteBits(overallScaleFactor[iCh][i],codingParams.nScaleBits)  # overall scale factor
+                    iMant=0  # index offset in mantissa array (because mantissas w/ zero bits are omitted)
+                    for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                        ba = bitAlloc[iCh][i][iBand]
+                        if ba: ba-=1  # if non-zero, store as one less (since no bit allocation of 1 bits/mantissa)
+                        pb.WriteBits(ba,codingParams.nMantSizeBits)  # bit allocation for this band (written as one less if non-zero)
+                        pb.WriteBits(scaleFactor[iCh][i][iBand],codingParams.nScaleBits)  # scale factor for this band (if bit allocation non-zero)
+                        if bitAlloc[iCh][i][iBand]:
+                            for j in range(codingParams.sfBands.nLines[iBand]):
+                                pb.WriteBits(mantissa[iCh][i][iMant+j],bitAlloc[iCh][i][iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so is 1 higher than the number
+                            iMant += codingParams.sfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
+            else:
+                # now pack the nBytes of data into the PackedBits object
+                pb.WriteBits(overallScaleFactor[iCh],codingParams.nScaleBits)  # overall scale factor
+                iMant=0  # index offset in mantissa array (because mantissas w/ zero bits are omitted)
+                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                    ba = bitAlloc[iCh][iBand]
+                    if ba: ba-=1  # if non-zero, store as one less (since no bit allocation of 1 bits/mantissa)
+                    pb.WriteBits(ba,codingParams.nMantSizeBits)  # bit allocation for this band (written as one less if non-zero)
+                    pb.WriteBits(scaleFactor[iCh][iBand],codingParams.nScaleBits)  # scale factor for this band (if bit allocation non-zero)
+                    if bitAlloc[iCh][iBand]:
+                        for j in range(codingParams.sfBands.nLines[iBand]):
+                            pb.WriteBits(mantissa[iCh][iMant+j],bitAlloc[iCh][iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so is 1 higher than the number
+                        iMant += codingParams.sfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
             # done packing (end loop over scale factor bands)
 
             # CUSTOM DATA:
@@ -338,8 +445,8 @@ class PACFile(AudioFile):
             # codingParams.secretMessage = "DATA BLOCK WRITING. BYE"
             # binary for block type
             # 0b00 = regular long, 0b01 = short, 0b10 = start, 0b11 = stop
-            codingParams.currblockType = bin(0)
-            codingParams.shortBlockInd = bin(7)  # indexed 0-7
+            #codingParams.currblockType = bin(0)
+            #codingParams.shortBlockInd = bin(7)  # indexed 0-7
             # finally, write the data in this channel's PackedBits object to the output file
             self.fp.write(pb.GetPackedData())
         # end loop over channels, done writing coded data for all channels
