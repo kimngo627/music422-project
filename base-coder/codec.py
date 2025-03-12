@@ -17,6 +17,13 @@ from quantize import *  # using vectorized versions (to use normal versions, unc
 from psychoac import CalcSMRs  # calculates SMRs for each scale factor band
 from bitalloc import BitAlloc  #allocates bits to scale factor bands given SMRs
 
+# binary used for keeping track of what kind of block should be used
+LONG  = bin(0)
+START = bin(1)
+SHORT = bin(2)
+STOP  = bin(3)
+
+N_SHORT = 64
 
 def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
     """Reconstitutes a single-channel block of encoded data into a block of
@@ -68,6 +75,8 @@ def EncodeSingleChannel(data,codingParams):
     """Encodes a single-channel block of signed-fraction data based on the parameters in a PACFile object"""
 
     # prepare various constants
+    if (codingParams.priorBlockType == START):
+        
     halfN = codingParams.nMDCTLines
     N = 2*halfN
     nScaleBits = codingParams.nScaleBits
@@ -87,7 +96,16 @@ def EncodeSingleChannel(data,codingParams):
     # window data for side chain FFT and also window and compute MDCT
     timeSamples = data
     mdctTimeSamples = SineWindow(data) # TODO block switching
-    mdctLines = MDCT(mdctTimeSamples, halfN, halfN)[:halfN]
+
+    # working with a start transition window, left half long, right half short
+    if (codingParams.priorBlockType == START): 
+        half = (halfN + N_SHORT) // 2
+        mdctLines = MDCT(mdctTimeSamples, halfN, N_SHORT)[:half]
+    elif (codingParams.priorBlockType == START):    # working with stop transition window, left half short, right half long
+        half = (halfN + N_SHORT) // 2
+        mdctLines = MDCT(mdctTimeSamples, N_SHORT, halfN)[:half]
+    else:
+        mdctLines = MDCT(mdctTimeSamples, halfN, halfN)[:halfN]
 
     # compute overall scale factor for this block and boost mdctLines using it
     maxLine = np.max( np.abs(mdctLines) )

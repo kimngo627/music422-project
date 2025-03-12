@@ -100,6 +100,19 @@ Description of the PAC File Format:
                 <extra custom data bits as long as space is included in nBytes>
 
 """
+'''
+Changes from block switching 
+ReadFileHeader(): 
+    myParams.numSamples = numSamples + nMDCTLines   # because we prepend N zeros to the beginning of audio file
+WriteDataBlock(): additional coding parameters 
+    # binary used for keeping track of what kind of block should be used
+    # 0b00 = regular long, 0b01 = start, 0b10 = short,  0b11 = stop
+    codingParams.currBlockType = bin(0)
+    # we are using 8 short blocks in substitution of a long block, keep track which one
+    codingParams.shortBlockInd = bin(7)  # indexed 0-7
+    # codingParams.shortBlockInd used to indicate if we should use start or stop block
+
+'''
 
 from audiofile import * # base class
 from bitpack import *  # class for packing data into an array of bytes where each item's number of bits is specified
@@ -109,6 +122,7 @@ from psychoac import ScaleFactorBands, AssignMDCTLinesFromFreqLimits  # defines 
 import numpy as np  # to allow conversion of data blocks to numpy's array object
 MAX16BITS = 32767
 
+from transient_detector import *
 
 class PACFile(AudioFile):
     """
@@ -136,7 +150,7 @@ class PACFile(AudioFile):
         myParams=CodingParams()
         myParams.sampleRate = sampleRate
         myParams.nChannels = nChannels
-        myParams.numSamples = numSamples
+        myParams.numSamples = numSamples + nMDCTLines   # because we prepend N zeros to the beginning of audio file
         myParams.nMDCTLines = myParams.nSamplesPerBlock = nMDCTLines
         myParams.nScaleBits = nScaleBits
         myParams.nMantSizeBits = nMantSizeBits
@@ -195,11 +209,9 @@ class PACFile(AudioFile):
             # done unpacking data (end loop over scale factor bands)
 
             # CUSTOM DATA:
-            # < now can unpack any custom data passed in the nBytes of data > # TODO: specific instructions for this block? 
+            # < now can unpack any custom data passed in the nBytes of data > 
             # block type
-            # binary for block type
-            # 0b00 = regular long, 0b01 = short, 0b10 = start, 0b11 = stop
-            codingParams.blockType = bin(0)
+            
             # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
             decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
             data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
@@ -243,7 +255,18 @@ class PACFile(AudioFile):
         codingParams.priorBlock = priorBlock
         return
 
-
+    ''''
+        1. prepend N zeros infront of first block, enter while loop. -- already included in starter code 
+        2. readdatablock
+        3. writedatablock:
+            1. we will detect for transience in first block (current block). If find transience, 
+            block type of zeros is start block. current block type is short. 
+            2. do mdct on the zeros + first half of first block.
+        - next iteration of while loop. repeat #1,2,3
+            1. we will detect for transience in second block.
+            2. do mdct on N/2 zeros + first half of first block.
+        - next iteration of while loop. repeat #1,2,3, 3.1, 3.2
+    '''
     def WriteDataBlock(self,data, codingParams):
         """
         Writes a block of signed-fraction data to a PACFile object that has
@@ -254,6 +277,25 @@ class PACFile(AudioFile):
         for iCh in range(codingParams.nChannels):
             fullBlockData.append( np.concatenate( ( codingParams.priorBlock[iCh], data[iCh]) ) )
         codingParams.priorBlock = data  # current pass's data is next pass's prior block data
+
+        # we want to first start off detecting for transience
+        # how to get the next block? 
+        ## transience detection function here
+        transienceChecker = True
+        if (transienceChecker):
+            codingParams.priorBlockType = START
+            codingParams.currblockType = SHORT
+            codingParams.shortBlockInd = 0
+        else:
+            codingParams.priorBlockType = LONG
+            codingParams.currblockType = LONG
+
+        # add in logic for if we are at short block[7] (the last one), the next block should be stop block or short block?
+        # if priorBlockType = start and currBlockType = short, shortBlockInd = 0
+        # the next 7 block types must be short as well. (up to shortBlockInd = 7)
+        
+        # can have 8 or more short blocks, but not less than 8
+
 
         # (ENCODE HERE) Encode the full block of multi=channel data
         (scaleFactor,bitAlloc,mantissa, overallScaleFactor) = self.Encode(fullBlockData,codingParams)  # returns a tuple with all the block-specific info not in the file header
@@ -299,7 +341,10 @@ class PACFile(AudioFile):
             # CUSTOM DATA:
             # < now can add in custom data if space allocated in nBytes above>  # TODO for specific instructions on block? 
             # codingParams.secretMessage = "DATA BLOCK WRITING. BYE"
-            
+            # binary for block type
+            # 0b00 = regular long, 0b01 = short, 0b10 = start, 0b11 = stop
+            codingParams.currblockType = bin(0)
+            codingParams.shortBlockInd = bin(7)  # indexed 0-7
             # finally, write the data in this channel's PackedBits object to the output file
             self.fp.write(pb.GetPackedData())
         # end loop over channels, done writing coded data for all channels
@@ -392,13 +437,42 @@ if __name__=="__main__":
         outFile.OpenForWriting(codingParams) # (includes writing header)
 
         # Read the input file and pass its data to the output file to be written
+        ''''
+        1. prepend N zeros infront of first block, enter while loop. -- already included in starter code 
+        2. readdatablock
+        3. writedatablock:
+            1. we will detect for transience in first block (current block). If find transience, 
+            block type of zeros is start block. current block type is short. 
+            2. do mdct on the zeros + first half of first block.
+        - next iteration of while loop. repeat #1,2,3
+            1. we will detect for transience in second block.
+            2. do mdct on N/2 zeros + first half of first block.
+        - next iteration of while loop. repeat #1,2,3, 3.1, 3.2
+        '''
+        # prepend N zeros infront of first block
+        # data=[]
+        # for iCh in range(codingParams.nChannels):
+        #     data.append(np.zeros(codingParams.nMDCTLines, dtype=np.float64))
+        # if true, read prepend zeros before start of actual audio data
+
+        # used for detecting transience in audio file
+        detector = TransientDetector(
+            method=DetectionMethod.MODEL,
+            model_path="transient_detection_model_final.pth"
+        )
+        codingParams.firstBlock = True
+        count = 0
         while True:
-            data=inFile.ReadDataBlock(codingParams)
+            data = inFile.ReadDataBlock(codingParams)  
             if not data: break  # we hit the end of the input file
-            outFile.WriteDataBlock(data,codingParams)
+            outFile.WriteDataBlock(data,codingParams) 
+            if (codingParams.firstBlock): codingParams.firstBlock = False
             print( ".",end="")  # just to signal how far we've gotten to user
+            # count += 1  # used for debugging
+            # if (count >= 4): break
         # end loop over reading/writing the blocks
 
+        # TODO: take out the prepended zeros to get back to original audio length
         # close the files
         inFile.Close(codingParams)
         outFile.Close(codingParams)
