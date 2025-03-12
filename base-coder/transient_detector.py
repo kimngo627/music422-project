@@ -97,7 +97,10 @@ class TransientDetector:
         
         # Convert to tensor and add batch dimension
         features = torch.from_numpy(log_spec).float().unsqueeze(0)  # [1, freq_bins, time_frames]
-        features = features.permute(0, 3, 2, 1)
+        print("features shape after 1st unsqueeze", features.shape)
+        # features = features.permute(0, 3, 2, 1) 
+        features = features.unsqueeze(0)
+        print("features shape after second unsqueeze", features.shape)
 
         if features.dim() > 3:
             # If we somehow have more than 3 dimensions, take just the first channel
