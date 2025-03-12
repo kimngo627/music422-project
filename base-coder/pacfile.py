@@ -123,6 +123,7 @@ import numpy as np  # to allow conversion of data blocks to numpy's array object
 MAX16BITS = 32767
 
 from transient_detector import *
+SR = 44100
 
 class PACFile(AudioFile):
     """
@@ -278,23 +279,17 @@ class PACFile(AudioFile):
             fullBlockData.append( np.concatenate( ( codingParams.priorBlock[iCh], data[iCh]) ) )
         codingParams.priorBlock = data  # current pass's data is next pass's prior block data
 
-        # we want to first start off detecting for transience
-        # how to get the next block? 
-        ## transience detection function here
-        transienceChecker = True
-        if (transienceChecker):
-            codingParams.priorBlockType = START
-            codingParams.currblockType = SHORT
-            codingParams.shortBlockInd = 0
-        else:
-            codingParams.priorBlockType = LONG
-            codingParams.currblockType = LONG
+        # we want to first start off detecting for transience in next block
+        next_block = inFile.ReadDataBlock(codingParams) 
+        is_transient = detector.detect(next_block, SR)
+        # save the block type for next pass
+        codingParams.blockType = detector.get_block_type(next_block, sr)
 
-        # add in logic for if we are at short block[7] (the last one), the next block should be stop block or short block?
+        # add in logic for if we are at short block[14] (the last one), check if the next block should be stop block or short block?
         # if priorBlockType = start and currBlockType = short, shortBlockInd = 0
-        # the next 7 block types must be short as well. (up to shortBlockInd = 7)
+        # the next 14 block types must be short as well. (up to shortBlockInd = 14)
         
-        # can have 8 or more short blocks, but not less than 8
+        # can have 15 or more short blocks, but not less than 15
 
 
         # (ENCODE HERE) Encode the full block of multi=channel data
