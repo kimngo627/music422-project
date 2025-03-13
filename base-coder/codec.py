@@ -75,23 +75,38 @@ def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
     else:
         rescaleLevel = 1.*(1<<overallScaleFactor)
         # reconstitute the first halfN MDCT lines of this channel from the stored data
-        mdctLine = np.zeros(halfN,dtype=np.float64)
+        if blockType == LONG:
+            mdctLine = np.zeros(halfN,dtype=np.float64)
+            sfBands = codingParams.sfBands
+        elif blockType == START:
+            mdctLine = np.zeros((halfN + shortHalfN)//2,dtype=np.float64)
+            print(f"MDCT Line:{mdctLine.shape}")
+            sfBands = codingParams.transitionSfBands
+        elif blockType == STOP:
+            mdctLine = np.zeros((halfN + shortHalfN)//2,dtype=np.float64)
+            sfBands = codingParams.transitionSfBands
         iMant = 0
-        for iBand in range(codingParams.sfBands.nBands):
-            nLines =codingParams.sfBands.nLines[iBand]
+        for iBand in range(sfBands.nBands):
+            nLines =sfBands.nLines[iBand]
             if bitAlloc[iBand]:
+                print(vDequantize(scaleFactor[iBand], mantissa[iMant:(iMant+nLines)],codingParams.nScaleBits, bitAlloc[iBand]).shape)
+                print(mdctLine[iMant:(iMant+nLines)].shape)
+                print(nLines)
                 mdctLine[iMant:(iMant+nLines)]=vDequantize(scaleFactor[iBand], mantissa[iMant:(iMant+nLines)],codingParams.nScaleBits, bitAlloc[iBand])
             iMant += nLines
         mdctLine /= rescaleLevel  # put overall gain back to original level
 
 
         # IMDCT and window the data for this channel
+        print(blockType)
         if blockType == LONG:
             data = SineWindow( IMDCT(mdctLine, halfN, halfN) )  # takes in halfN MDCT coeffs
         elif blockType == START:
-            data = TransitionWindow(IMDCT(mdctLine, halfN, halfN), SineWindowFunc, N, shortN, start=True)
+            # need to use halfN and shortHalfN
+            data = TransitionWindow(IMDCT(mdctLine, halfN, shortHalfN), SineWindowFunc, N, shortN, start=True)
         elif blockType == STOP:
-            data = TransitionWindow(IMDCT(mdctLine, halfN, halfN), SineWindowFunc, N, shortN, start=False)
+            # need to use halfN and shortHalfN
+            data = TransitionWindow(IMDCT(mdctLine, shortHalfN, halfN), SineWindowFunc, N, shortN, start=False)
         else:
             # Fallback for unexpected block types
             print(f"Warning: Unknown block type {blockType} in Decode, defaulting to LONG")
@@ -133,8 +148,7 @@ def EncodeSingleChannel(data,codingParams):
     blockType = codingParams.currBlockType
     # vectorizing the Mantissa function call
     #vMantissa = np.vectorize(Mantissa)
-
-    sfBands = codingParams.sfBands
+    # TODO: define sfBands for transition blocks
     #mdctLines = MDCT(mdctTimeSamples, halfN, halfN)[:halfN]
     
     timeSamples = data
@@ -167,12 +181,12 @@ def EncodeSingleChannel(data,codingParams):
     elif blockType == START:
         mdctTimeSamples = TransitionWindow(data, SineWindowFunc, N, shortN, start=True)
         mdctLines = MDCT(mdctTimeSamples, halfN, shortHalfN)[:halfN]
-        sfBands = codingParams.sfBands
+        sfBands = codingParams.transitionSfBands
 
     elif blockType == STOP:
         mdctTimeSamples = TransitionWindow(data, SineWindowFunc, N, shortN, start=False)
         mdctLines = MDCT(mdctTimeSamples, shortHalfN, halfN)[:halfN]
-        sfBands = codingParams.sfBands
+        sfBands = codingParams.transitionSfBands
 
     else:
         # Fallback for undefined block types (this should never happen)

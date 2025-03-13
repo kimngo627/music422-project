@@ -163,6 +163,7 @@ class PACFile(AudioFile):
         AssignMDCTLinesFromFreqLimits(N_SHORT//2, myParams.sampleRate, 
                                      flimit=short_cbFreqLimits)
         )
+        transitionSfBands = ScaleFactorBands(AssignMDCTLinesFromFreqLimits((N//2 + N_SHORT//2) // 2, myParams.sampleRate))
         myParams.nChannels = nChannels
         myParams.numSamples = numSamples # + nMDCTLines   # because we prepend N zeros to the beginning of audio file
         myParams.nMDCTLines = myParams.nSamplesPerBlock = nMDCTLines
@@ -171,6 +172,7 @@ class PACFile(AudioFile):
         # add in scale factor band information
         myParams.sfBands =sfBands
         myParams.shortSfBands = shortSfBands
+        myParams.transitionSfBands = transitionSfBands
         # start w/o all zeroes as data from prior block to overlap-and-add for output
         overlapAndAdd = []
         for iCh in range(nChannels): overlapAndAdd.append( np.zeros(nMDCTLines, dtype=np.float64) )
@@ -267,21 +269,25 @@ class PACFile(AudioFile):
                 # codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
 
             else:
+                if codingParams.currBlockType == LONG:
+                    sfBands = codingParams.sfBands
+                else:
+                    sfBands = codingParams.transitionSfBands
                 overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
                 scaleFactor=[]
                 bitAlloc=[]
                 mantissa=np.zeros(codingParams.nMDCTLines,np.int32)  # start w/ all mantissas zero
-                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                for iBand in range(sfBands.nBands): # loop over each scale factor band to pack its data
                     ba = pb.ReadBits(codingParams.nMantSizeBits)
                     if ba: ba+=1  # no bit allocation of 1 so ba of 2 and up stored as one less
                     bitAlloc.append(ba)  # bit allocation for this band
                     scaleFactor.append(pb.ReadBits(codingParams.nScaleBits))  # scale factor for this band
                     if bitAlloc[iBand]:
                         # if bits allocated, extract those mantissas and put in correct location in matnissa array
-                        m=np.empty(codingParams.sfBands.nLines[iBand],np.int32)
-                        for j in range(codingParams.sfBands.nLines[iBand]):
+                        m=np.empty(sfBands.nLines[iBand],np.int32)
+                        for j in range(sfBands.nLines[iBand]):
                             m[j]=pb.ReadBits(bitAlloc[iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so encoded as 1 lower than actual allocation
-                        mantissa[codingParams.sfBands.lowerLine[iBand]:(codingParams.sfBands.upperLine[iBand]+1)] = m
+                        mantissa[sfBands.lowerLine[iBand]:(sfBands.upperLine[iBand]+1)] = m
                 # done unpacking data (end loop over scale factor bands)
 
                 # CUSTOM DATA:
@@ -444,9 +450,11 @@ class PACFile(AudioFile):
         shortSfBands = ScaleFactorBands( AssignMDCTLinesFromFreqLimits(N_SHORT//2, codingParams.sampleRate, 
                                      flimit=short_cbFreqLimits)
         )
+        transitionSfBands = ScaleFactorBands(AssignMDCTLinesFromFreqLimits((N//2 + N_SHORT//2) // 2, codingParams.sampleRate))
         # codingParams.secretMessage = "writing file header secret message"
         codingParams.sfBands=sfBands
         codingParams.shortSfBands = shortSfBands
+        codingParams.transitionSfBands = transitionSfBands
         self.fp.write(pack('<L',sfBands.nBands))
         self.fp.write(pack('<'+str(sfBands.nBands)+'H',*(sfBands.nLines.tolist()) ))
         # start w/o all zeroes as prior block of unencoded data for other half of MDCT block
@@ -535,11 +543,15 @@ class PACFile(AudioFile):
                             # if non-zero bit allocation for this band, add in bits for scale factor and each mantissa (0 bits means zero)
                             nBytes += bitAlloc[iCh][i][iBand]*codingParams.shortSfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
             else:
-                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to get its bits
+                if codingParams.currBlockType == LONG:
+                    sfBands = codingParams.sfBands
+                else:
+                    sfBands = codingParams.transitionSfBands
+                for iBand in range(sfBands.nBands): # loop over each scale factor band to get its bits
                     nBytes += codingParams.nMantSizeBits+codingParams.nScaleBits    # mantissa bit allocation and scale factor for that sf band
                     if bitAlloc[iCh][iBand]:
                         # if non-zero bit allocation for this band, add in bits for scale factor and each mantissa (0 bits means zero)
-                        nBytes += bitAlloc[iCh][iBand]*codingParams.sfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
+                        nBytes += bitAlloc[iCh][iBand]*sfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
             # end computing bits needed for this channel's data
 
             # CUSTOM DATA:
@@ -585,18 +597,22 @@ class PACFile(AudioFile):
                                 pb.WriteBits(mantissa[iCh][i][iMant+j],bitAlloc[iCh][i][iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so is 1 higher than the number
                             iMant += codingParams.shortSfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
             else:
+                if codingParams.currBlockType == LONG:
+                    sfBands = codingParams.sfBands
+                else:
+                    sfBands = codingParams.transitionSfBands
                 # now pack the nBytes of data into the PackedBits object
                 pb.WriteBits(overallScaleFactor[iCh],codingParams.nScaleBits)  # overall scale factor
                 iMant=0  # index offset in mantissa array (because mantissas w/ zero bits are omitted)
-                for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                for iBand in range(sfBands.nBands): # loop over each scale factor band to pack its data
                     ba = bitAlloc[iCh][iBand]
                     if ba: ba-=1  # if non-zero, store as one less (since no bit allocation of 1 bits/mantissa)
                     pb.WriteBits(ba,codingParams.nMantSizeBits)  # bit allocation for this band (written as one less if non-zero)
                     pb.WriteBits(scaleFactor[iCh][iBand],codingParams.nScaleBits)  # scale factor for this band (if bit allocation non-zero)
                     if bitAlloc[iCh][iBand]:
-                        for j in range(codingParams.sfBands.nLines[iBand]):
+                        for j in range(sfBands.nLines[iBand]):
                             pb.WriteBits(mantissa[iCh][iMant+j],bitAlloc[iCh][iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so is 1 higher than the number
-                        iMant += codingParams.sfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
+                        iMant += sfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
             # done packing (end loop over scale factor bands)
 
             # CUSTOM DATA:
@@ -668,12 +684,12 @@ if __name__=="__main__":
         # create the audio file objects
         if Direction == "Encode":
             print( "\n\tEncoding input PCM file...",)
-            inFile= PCMFile("audio/castanets.wav")
-            outFile = PACFile("audio/castanets_128kbps.pac")
+            inFile= PCMFile("audio/spgm.wav")
+            outFile = PACFile("audio/spgm_128kbps.pac")
         else: # "Decode"
             print( "\n\tDecoding coded PAC file...",)
-            inFile = PACFile("audio/castanets_128kbps.pac")
-            outFile= PCMFile("audio/castanets_128kbps.wav")
+            inFile = PACFile("audio/spgm_128kbps.pac")
+            outFile= PCMFile("audio/spgm_128kbps.wav")
         # only difference is file names and type of AudioFile object
 
         # open input file
