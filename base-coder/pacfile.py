@@ -117,7 +117,7 @@ WriteDataBlock(): additional coding parameters
 from audiofile import * # base class
 from bitpack import *  # class for packing data into an array of bytes where each item's number of bits is specified
 import codec    # module where the actual PAC coding functions reside(this module only specifies the PAC file format)
-from psychoac import ScaleFactorBands, AssignMDCTLinesFromFreqLimits  # defines the grouping of MDCT lines into scale factor bands
+from psychoac import *  # defines the grouping of MDCT lines into scale factor bands
 
 import numpy as np  # to allow conversion of data blocks to numpy's array object
 MAX16BITS = 32767
@@ -132,6 +132,7 @@ SHORT = bin(2)
 STOP  = bin(3)
 
 N = 1024
+N_SHORT = 128
 
 class PACFile(AudioFile):
     """
@@ -158,6 +159,10 @@ class PACFile(AudioFile):
         # load up a CodingParams object with the header data
         myParams=CodingParams()
         myParams.sampleRate = sampleRate
+        shortSfBands = ScaleFactorBands(
+        AssignMDCTLinesFromFreqLimits(N_SHORT//2, myParams.sampleRate, 
+                                     flimit=short_cbFreqLimits)
+        )
         myParams.nChannels = nChannels
         myParams.numSamples = numSamples # + nMDCTLines   # because we prepend N zeros to the beginning of audio file
         myParams.nMDCTLines = myParams.nSamplesPerBlock = nMDCTLines
@@ -165,6 +170,7 @@ class PACFile(AudioFile):
         myParams.nMantSizeBits = nMantSizeBits
         # add in scale factor band information
         myParams.sfBands =sfBands
+        myParams.shortSfBands = shortSfBands
         # start w/o all zeroes as data from prior block to overlap-and-add for output
         overlapAndAdd = []
         for iCh in range(nChannels): overlapAndAdd.append( np.zeros(nMDCTLines, dtype=np.float64) )
@@ -209,27 +215,38 @@ class PACFile(AudioFile):
                 codingParams.currBlockType = START   # 10 = START
             elif blockType_bits == 3:
                 codingParams.currBlockType = STOP    # 11 = STOP
-            # print("block type: ", codingParams.currBlockType)
+            print("read block type: ", codingParams.currBlockType)
             # extract the data from the PackedBits object
             if codingParams.currBlockType == SHORT:
                 # TODO: Modify the following code to loop through and read short blocks one by one
-                num_short_blocks = (len(data) // (N_SHORT//2)) - 1
+                num_short_blocks = (N // N_SHORT) * 2 - 1
+                overallScaleFactor = []
+                scaleFactor=[]
+                bitAlloc=[]
+                mantissa = []
                 for i in range(num_short_blocks):
-                    overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
-                    scaleFactor=[]
-                    bitAlloc=[]
-                    mantissa=np.zeros(codingParams.nMDCTLines,np.int32)  # start w/ all mantissas zero
-                    for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                    #overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
+                    osf = pb.ReadBits(codingParams.nScaleBits)
+                    overallScaleFactor.append(osf)
+                    block_scaleFactor=[]
+                    block_bitAlloc=[]
+                    block_mantissa=np.zeros(N_SHORT//2,np.int32)  # start w/ all mantissas zero
+                    iMant = 0
+                    for iBand in range(codingParams.shortSfBands.nBands): # loop over each scale factor band to pack its data
                         ba = pb.ReadBits(codingParams.nMantSizeBits)
                         if ba: ba+=1  # no bit allocation of 1 so ba of 2 and up stored as one less
-                        bitAlloc.append(ba)  # bit allocation for this band
-                        scaleFactor.append(pb.ReadBits(codingParams.nScaleBits))  # scale factor for this band
-                        if bitAlloc[iBand]:
+                        block_bitAlloc.append(ba)  # bit allocation for this band
+                        block_scaleFactor.append(pb.ReadBits(codingParams.nScaleBits))  # scale factor for this band
+                        if block_bitAlloc[iBand]:
                             # if bits allocated, extract those mantissas and put in correct location in matnissa array
-                            m=np.empty(codingParams.sfBands.nLines[iBand],np.int32)
-                            for j in range(codingParams.sfBands.nLines[iBand]):
-                                m[j]=pb.ReadBits(bitAlloc[iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so encoded as 1 lower than actual allocation
-                            mantissa[codingParams.sfBands.lowerLine[iBand]:(codingParams.sfBands.upperLine[iBand]+1)] = m
+                            m=np.empty(codingParams.shortSfBands.nLines[iBand],np.int32)
+                            for j in range(codingParams.shortSfBands.nLines[iBand]):
+                                m[j]=pb.ReadBits(block_bitAlloc[iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so encoded as 1 lower than actual allocation
+                            block_mantissa[iMant:(iMant+codingParams.shortSfBands.nLines[iBand])] = m
+                        iMant += codingParams.shortSfBands.nLines[iBand]
+                    bitAlloc.append(block_bitAlloc)
+                    scaleFactor.append(block_scaleFactor)
+                    mantissa.append(block_mantissa)
                     # done unpacking data (end loop over scale factor bands)
 
                     # CUSTOM DATA:
@@ -237,10 +254,17 @@ class PACFile(AudioFile):
                     # block type
                 
                 
-                    # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
-                    decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
-                    data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
-                    codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
+                # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
+                decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
+                # if len(codingParams.overlapAndAdd[iCh]) != codingParams.nMDCTLines:
+                #     adjusted_overlap = np.zeros(codingParams.nMDCTLines)
+                    
+                #     overlap_length = min(len(codingParams.overlapAndAdd[iCh]), codingParams.nMDCTLines)
+                #     adjusted_overlap[:overlap_length] = codingParams.overlapAndAdd[iCh][:overlap_length]
+                    
+                #     codingParams.overlapAndAdd[iCh] = adjusted_overlap
+                # data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
+                # codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
 
             else:
                 overallScaleFactor = pb.ReadBits(codingParams.nScaleBits)  # overall scale factor
@@ -266,8 +290,129 @@ class PACFile(AudioFile):
                 
                 # (DECODE HERE) decode the unpacked data for this channel, overlap-and-add first half, and append it to the data array (saving other half for next overlap-and-add)
                 decodedData = self.Decode(scaleFactor,bitAlloc,mantissa, overallScaleFactor,codingParams)
-                data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
-                codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
+                # data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
+                # codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
+
+            print(f"\nOverlap-and-add for block type: {codingParams.currBlockType}")
+            print(f"Previous overlap buffer size: {len(codingParams.overlapAndAdd[iCh])}")
+            print(f"Decoded data size: {len(decodedData)}")
+            if codingParams.currBlockType == SHORT:
+                shortHalfN = N_SHORT // 2
+                num_short_blocks = ((N//2) // shortHalfN) * 2 - 1
+                print(f"SHORT block with {num_short_blocks} sub-blocks")
+                
+                # First half of the block overlaps with previous block's saved half
+                first_half_size = len(codingParams.overlapAndAdd[iCh])
+                data[iCh] = np.concatenate((
+                    data[iCh],
+                    np.add(
+                        codingParams.overlapAndAdd[iCh][:first_half_size],
+                        decodedData[:first_half_size]
+                    )
+                ))
+                
+                # Add intermediate short blocks
+                if first_half_size < codingParams.nMDCTLines:
+                    data[iCh] = np.concatenate((
+                        data[iCh],
+                        decodedData[first_half_size:codingParams.nMDCTLines]
+                    ))
+                
+                # Save the second half for next block
+                codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]
+                print(f"Saving SHORT block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+            # if codingParams.currBlockType == SHORT:
+            #     shortHalfN = N_SHORT // 2
+                
+            #     # # Ensure overlap buffer is the right size for SHORT blocks
+            #     # if len(codingParams.overlapAndAdd[iCh]) != shortHalfN:
+            #     #     adjusted_overlap = np.zeros(shortHalfN, dtype=np.float64)
+            #     #     overlap_size = min(len(codingParams.overlapAndAdd[iCh]), shortHalfN)
+            #     #     adjusted_overlap[:overlap_size] = codingParams.overlapAndAdd[iCh][:overlap_size]
+            #     #     codingParams.overlapAndAdd[iCh] = adjusted_overlap
+                
+            #     # Overlap-add with the previous block's saved buffer
+            #     # (only the first shortHalfN samples need overlap-add)
+            #     data[iCh] = np.concatenate((
+            #         data[iCh],
+            #         np.add(
+            #             codingParams.overlapAndAdd[iCh],
+            #             decodedData[:shortHalfN]
+            #         )
+            #     ))
+                
+            #     # Add the rest of the data without overlap (it's already internally overlap-added)
+            #     if len(decodedData) > shortHalfN:
+            #         data[iCh] = np.concatenate((
+            #             data[iCh],
+            #             decodedData[shortHalfN:-shortHalfN]  # All except first and last shortHalfN
+            #         ))
+                
+            #     # Save the last shortHalfN samples for next block's overlap
+            #     codingParams.overlapAndAdd[iCh] = decodedData[-shortHalfN:].copy()
+            #     print(f"Saving SHORT block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+
+            elif codingParams.currBlockType == START:
+                halfN = codingParams.nMDCTLines
+                
+                # Overlap-and-add with previous block
+                data[iCh] = np.concatenate((
+                    data[iCh],
+                    np.add(
+                        codingParams.overlapAndAdd[iCh],
+                        decodedData[:halfN]
+                    )
+                ))
+                
+                # Save second half at SHORT block size for next overlap
+                shortHalfN = N_SHORT // 2
+                codingParams.overlapAndAdd[iCh] = np.zeros(shortHalfN, dtype=np.float64)
+                overlap_size = min(len(decodedData) - halfN, shortHalfN)
+                codingParams.overlapAndAdd[iCh][:overlap_size] = decodedData[halfN:halfN+overlap_size]
+                print(f"Saving START block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+
+            elif codingParams.currBlockType == STOP:
+                # STOP blocks transition from SHORT to LONG
+                shortHalfN = N_SHORT // 2
+                halfN = codingParams.nMDCTLines
+                
+                # Overlap-and-add with previous block
+                data[iCh] = np.concatenate((
+                    data[iCh],
+                    np.add(
+                        codingParams.overlapAndAdd[iCh],
+                        decodedData[:len(codingParams.overlapAndAdd[iCh])]
+                    )
+                ))
+                
+                # Add the rest of the first half
+                if len(codingParams.overlapAndAdd[iCh]) < halfN:
+                    data[iCh] = np.concatenate((
+                        data[iCh],
+                        decodedData[len(codingParams.overlapAndAdd[iCh]):halfN]
+                    ))
+                
+                # Save second half at LONG block size for next overlap
+                codingParams.overlapAndAdd[iCh] = np.zeros(halfN, dtype=np.float64)
+                overlap_size = min(len(decodedData) - halfN, halfN)
+                codingParams.overlapAndAdd[iCh][:overlap_size] = decodedData[halfN:halfN+overlap_size]
+                print(f"Saving STOP block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+
+            else:  # LONG block
+                halfN = codingParams.nMDCTLines
+                
+                # Overlap-and-add with previous block
+                data[iCh] = np.concatenate((
+                    data[iCh],
+                    np.add(
+                        codingParams.overlapAndAdd[iCh],
+                        decodedData[:halfN]
+                    )
+                ))
+                
+                # Save second half for next overlap
+                codingParams.overlapAndAdd[iCh] = decodedData[halfN:]
+                print(f"Saving LONG block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
 
         # end loop over channels, return signed-fraction samples for this block
         return data
@@ -296,8 +441,12 @@ class PACFile(AudioFile):
         sfBands=ScaleFactorBands( AssignMDCTLinesFromFreqLimits(codingParams.nMDCTLines,    #TODO change number of mdctlines?
                                                                 codingParams.sampleRate)
                                 )
+        shortSfBands = ScaleFactorBands( AssignMDCTLinesFromFreqLimits(N_SHORT//2, codingParams.sampleRate, 
+                                     flimit=short_cbFreqLimits)
+        )
         # codingParams.secretMessage = "writing file header secret message"
         codingParams.sfBands=sfBands
+        codingParams.shortSfBands = shortSfBands
         self.fp.write(pack('<L',sfBands.nBands))
         self.fp.write(pack('<'+str(sfBands.nBands)+'H',*(sfBands.nLines.tolist()) ))
         # start w/o all zeroes as prior block of unencoded data for other half of MDCT block
@@ -332,32 +481,34 @@ class PACFile(AudioFile):
         codingParams.priorBlock = data  # current pass's data is next pass's prior block data
         
         # print("inside write data block ", codingParams.__dict__)
+
         # we want to first start off detecting for transience in next block
-        next_block = inFile.ReadDataBlock(codingParams)
+        next_block = codingParams.next_block
         # print("call to read data block inside write data block ", codingParams.__dict__)
         if next_block:
             # print(len(next_block[0]))
             is_transient = detector.detect(next_block[0], SR)
 
             if hasattr(codingParams, 'blockState'):
-                next_block_type = codingParams.blockState.update(is_transient)
+                new_block_type = codingParams.blockState.update(is_transient)
             else:
                 if codingParams.currBlockType == LONG and is_transient:
-                    next_block_type = START
+                    new_block_type = START
                 elif codingParams.currBlockType == START:
-                    next_block_type = SHORT
+                    new_block_type = SHORT
                 elif codingParams.currBlockType == SHORT and is_transient:
-                    next_block_type = SHORT
+                    new_block_type = SHORT
                 elif codingParams.currBlockType == SHORT and not is_transient:
-                    next_block_type = STOP
+                    new_block_type = STOP
                 elif codingParams.currBlockType == STOP:
-                    next_block_type = LONG
+                    new_block_type = LONG
                 else:
-                    next_block_type = LONG
+                    new_block_type = LONG
 
-            codingParams.nextBlockType = next_block_type
+            codingParams.currBlockType = new_block_type
+            # Reset file position to where it was before reading
         else:
-            codingParams.nextBlockType = LONG
+            codingParams.currBlockType = LONG
 
         # (ENCODE HERE) Encode the full block of multi=channel data
         (scaleFactor,bitAlloc,mantissa, overallScaleFactor) = self.Encode(fullBlockData,codingParams)  # returns a tuple with all the block-specific info not in the file header
@@ -371,13 +522,18 @@ class PACFile(AudioFile):
             nBytes += 2
 
             if codingParams.currBlockType == SHORT:
-                num_short_blocks = 15
+                num_short_blocks = (N // N_SHORT) * 2 - 1
+                #print(f"SHORT block with {len(bitAlloc[iCh])} sub-blocks")
+                #for i in range(len(bitAlloc[iCh])):
+                    #print(f"  Sub-block {i} has {len(bitAlloc[iCh][i])} bands")
+                #print(f"sfBands.nBands = {codingParams.shortSfBands.nBands}")
                 for i in range(num_short_blocks):
-                    for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to get its bits
+                    nBytes += codingParams.nScaleBits
+                    for iBand in range(codingParams.shortSfBands.nBands): # loop over each scale factor band to get its bits
                         nBytes += codingParams.nMantSizeBits+codingParams.nScaleBits    # mantissa bit allocation and scale factor for that sf band
                         if bitAlloc[iCh][i][iBand]:
                             # if non-zero bit allocation for this band, add in bits for scale factor and each mantissa (0 bits means zero)
-                            nBytes += bitAlloc[iCh][i][iBand]*codingParams.sfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
+                            nBytes += bitAlloc[iCh][i][iBand]*codingParams.shortSfBands.nLines[iBand]  # no bit alloc = 1 so actuall alloc is one higher
             else:
                 for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to get its bits
                     nBytes += codingParams.nMantSizeBits+codingParams.nScaleBits    # mantissa bit allocation and scale factor for that sf band
@@ -395,6 +551,7 @@ class PACFile(AudioFile):
             self.fp.write(pack("<L",int(nBytes))) # stores size as a little-endian unsigned long
 
             # create a PackedBits object to hold the nBytes of data for this channel/block of coded data
+            #print(f"Block type: {codingParams.currBlockType}, Estimated bytes needed: {nBytes}")
             pb = PackedBits()
             pb.Size(nBytes)
 
@@ -407,23 +564,26 @@ class PACFile(AudioFile):
                 pb.WriteBits(1, 2)  # 01 = SHORT
             elif codingParams.currBlockType == STOP:
                 pb.WriteBits(3, 2)  # 11 = STOP
+            
+            print("wrote block type: ", codingParams.currBlockType)
 
             if codingParams.currBlockType == SHORT:
-                num_short_blocks = 15
+                num_short_blocks = (N // N_SHORT) * 2 - 1
 
                 for i in range(num_short_blocks):
                     # now pack the nBytes of data into the PackedBits object
                     pb.WriteBits(overallScaleFactor[iCh][i],codingParams.nScaleBits)  # overall scale factor
                     iMant=0  # index offset in mantissa array (because mantissas w/ zero bits are omitted)
-                    for iBand in range(codingParams.sfBands.nBands): # loop over each scale factor band to pack its data
+                    for iBand in range(codingParams.shortSfBands.nBands): # loop over each scale factor band to pack its data
                         ba = bitAlloc[iCh][i][iBand]
                         if ba: ba-=1  # if non-zero, store as one less (since no bit allocation of 1 bits/mantissa)
+                        #print(f"Final buffer usage: {pb.iByte} bytes and {pb.iBit} bits out of {nBytes} bytes")
                         pb.WriteBits(ba,codingParams.nMantSizeBits)  # bit allocation for this band (written as one less if non-zero)
                         pb.WriteBits(scaleFactor[iCh][i][iBand],codingParams.nScaleBits)  # scale factor for this band (if bit allocation non-zero)
                         if bitAlloc[iCh][i][iBand]:
-                            for j in range(codingParams.sfBands.nLines[iBand]):
+                            for j in range(codingParams.shortSfBands.nLines[iBand]):
                                 pb.WriteBits(mantissa[iCh][i][iMant+j],bitAlloc[iCh][i][iBand])     # mantissas for this band (if bit allocation non-zero) and bit alloc <>1 so is 1 higher than the number
-                            iMant += codingParams.sfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
+                            iMant += codingParams.shortSfBands.nLines[iBand]  # add to mantissa offset if we passed mantissas for this band
             else:
                 # now pack the nBytes of data into the PackedBits object
                 pb.WriteBits(overallScaleFactor[iCh],codingParams.nScaleBits)  # overall scale factor
@@ -461,6 +621,9 @@ class PACFile(AudioFile):
             # we are writing the coded file -- pass a block of zeros to move last data block to other side of MDCT block
             data = [ np.zeros(codingParams.nMDCTLines,dtype=np.float64),
                      np.zeros(codingParams.nMDCTLines,dtype=np.float64) ]
+            
+            # For the final block, there's no next block to check
+            codingParams.next_block = None
             self.WriteDataBlock(data, codingParams)
         self.fp.close()
 
@@ -505,12 +668,12 @@ if __name__=="__main__":
         # create the audio file objects
         if Direction == "Encode":
             print( "\n\tEncoding input PCM file...",)
-            inFile= PCMFile("audio/spgm.wav")
-            outFile = PACFile("audio/spgm_192kbps.pac")
+            inFile= PCMFile("audio/castanets.wav")
+            outFile = PACFile("audio/castanets_128kbps.pac")
         else: # "Decode"
             print( "\n\tDecoding coded PAC file...",)
-            inFile = PACFile("audio/spgm_192kbps.pac")
-            outFile= PCMFile("audio/spgm_192kbps.wav")
+            inFile = PACFile("audio/castanets_128kbps.pac")
+            outFile= PCMFile("audio/castanets_128kbps.wav")
         # only difference is file names and type of AudioFile object
 
         # open input file
@@ -524,7 +687,8 @@ if __name__=="__main__":
             codingParams.nMDCTLines = 1024                            
             codingParams.nScaleBits = 3
             codingParams.nMantSizeBits = 5
-            codingParams.targetBitsPerSample = 2.9
+            # 128kbps / 44.1kHz = 2.9, 192kbps / 44.1kHz = 4.35, 96kbps / 44.1kHz = 2.17, 64kbps / 44.1kHz = 1.45
+            codingParams.targetBitsPerSample = 2.9 
             # tell the PCM file how large the block size is
             codingParams.nSamplesPerBlock = codingParams.nMDCTLines   
         else: # "Decode"
@@ -563,13 +727,27 @@ if __name__=="__main__":
         )
         # codingParams.firstBlock = True
         count = 0
+        codingParams.next_block = None
+        data = []
         while True:
-            # print("inside while loop: ", codingParams.__dict__)
-            data = inFile.ReadDataBlock(codingParams)   # for encoding, see pcmfile ReadDataBlock
-            # print("after read" , len(data[0]), " block")
-            # print(codingParams.__dict__, "\n")
-            if not data: break  # we hit the end of the input file
-            outFile.WriteDataBlock(data,codingParams) 
+            if codingParams.next_block == None:
+                codingParams.next_block = inFile.ReadDataBlock(codingParams)
+                if not codingParams.next_block: break
+                continue
+            data = codingParams.next_block
+            codingParams.next_block = inFile.ReadDataBlock(codingParams)
+            if not codingParams.next_block: break
+            outFile.WriteDataBlock(data, codingParams)
+            # # print("inside while loop: ", codingParams.__dict__)
+            # data = inFile.ReadDataBlock(codingParams)   # for encoding, see pcmfile ReadDataBlock
+            # # print("after read" , len(data[0]), " block")
+            # # print(codingParams.__dict__, "\n")
+            # if not data: break  # we hit the end of the input file
+            # if codingParams.next_block is None:
+            #     # First iteration - read ahead one block
+            #     codingParams.next_block = inFile.ReadDataBlock(codingParams)
+            # outFile.WriteDataBlock(data,codingParams) 
+            # codingParams.next_block = data
             # if (codingParams.firstBlock): codingParams.firstBlock = False
             print( ".",end="")  # just to signal how far we've gotten to user
         # end loop over reading/writing the blocks
@@ -581,5 +759,5 @@ if __name__=="__main__":
     # end of loop over Encode/Decode
 
     elapsed = time.time()-elapsed
-    print( "\nDone with Encode/Decode test\n")
+    print( "\nDone with Encode/Decode\n")
     print( elapsed ," seconds elapsed")
