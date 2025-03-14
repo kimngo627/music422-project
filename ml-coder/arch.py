@@ -192,14 +192,6 @@ class PerceptualAudioCodec(nn.Module):
             DecoderBlock(32, 1)
         )
         
-        # # Perceptual loss
-        # self.mel_transform = torchaudio.transforms.MelSpectrogram(
-        #     sample_rate=sample_rate,
-        #     n_fft=2048,
-        #     hop_length=512,
-        #     n_mels=128
-        # )
-        
     def encode(self, x):
         # CNN encoding
         features = self.encoder(x)
@@ -257,27 +249,6 @@ class PerceptualAudioCodec(nn.Module):
         bits_per_sample = math.log2(self.codebook_size)
         bits_per_second = self.latent_samples * bits_per_sample / self.frame_length
         return bits_per_second / 1000  # Convert to kbps
-    
-    # def perceptual_loss(self, original, reconstructed):
-    #     """Calculate perceptual loss using mel spectrogram"""
-    #     # Convert to mel spectrograms
-    #     mel_original = self.mel_transform(original)
-    #     mel_reconstructed = self.mel_transform(reconstructed)
-        
-    #     # Apply log to better match human perception
-    #     log_mel_original = torch.log(mel_original + 1e-5)
-    #     log_mel_reconstructed = torch.log(mel_reconstructed + 1e-5)
-        
-    #     # Calculate loss
-    #     mel_loss = F.mse_loss(log_mel_original, log_mel_reconstructed)
-        
-    #     # Waveform reconstruction loss
-    #     waveform_loss = F.l1_loss(original, reconstructed)
-        
-    #     # Combined loss
-    #     combined_loss = mel_loss + 0.1 * waveform_loss
-        
-    #     return combined_loss
 
 
 # Training function
