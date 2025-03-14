@@ -43,18 +43,27 @@ def TransitionWindow(dataSampleArray, window, longLen, shortLen, start=True, sho
     elif (N < halfShortLen):
         print("not enough data samples to window with half SHORT window")
     if (short):
-        return window(shortLen) * dataSampleArray
+        return window(shortLen) * dataSampleArray[:shortLen]
     if (start):   #half long on left, half short on right
         halfLongWindowed = window(longLen)[:halfLongLen] * dataSampleArray[:halfLongLen]
-        ind = halfLongLen-halfShortLen # index at where the short window starts
-        halfShortWindowed = window(shortLen)[halfShortLen:] * (dataSampleArray[ind : ind + halfShortLen])
+        # Create a smooth transition window between long and short
+        transition_len = halfLongLen
+        transition_window = np.zeros(transition_len)
+        # This uses a cos^2 + sin^2 = 1 identity for perfect reconstruction
+        for n in range(transition_len):
+            alpha = n / transition_len
+            transition_window[n] = np.sqrt(1 - (window(longLen)[halfLongLen + n] ** 2)) 
+        
+        halfShortWindowed = window(shortLen)[halfShortLen:] * dataSampleArray[halfLongLen:halfLongLen+halfShortLen]
+        
         return np.concatenate((halfLongWindowed, halfShortWindowed))
     else:  #half short on left, half long on right
         halfShortWindowed = window(shortLen)[:halfShortLen] * dataSampleArray[:halfShortLen]
-        ind = halfShortLen # index at where the long window starts
-        windowtemp = window(longLen)[halfLongLen:] # we want only right half of the window
-        halfLongWindowed = windowtemp * dataSampleArray[ind : ind + halfLongLen]
+        halfLongWindowed = window(longLen)[halfLongLen:] * dataSampleArray[halfShortLen:halfShortLen+halfLongLen]
+        
         return np.concatenate((halfShortWindowed, halfLongWindowed))
+
+
 
 ### Problem 1.d ###
 def SineWindow(dataSampleArray):

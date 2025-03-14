@@ -25,7 +25,6 @@ START = bin(1)
 SHORT = bin(2)
 STOP  = bin(3)
 
-N = 1024
 N_SHORT = 128
 
 def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
@@ -42,7 +41,6 @@ def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
 
     if blockType == SHORT:
         num_short_blocks = (halfN // N_SHORT) * 2 - 1
-        print(f"Processing SHORT block with {num_short_blocks} sub-blocks")
         if hasattr(codingParams, 'shortSfBands'):
             sfBands = codingParams.shortSfBands
         else:
@@ -69,7 +67,7 @@ def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
             if end > N: end = N
 
             short_data = SineWindow(IMDCT(mdctLine, shortHalfN, shortHalfN))
-            fullShortData[start:end] += short_data[:end-start]
+            fullShortData[start:end] += short_data[:shortN]
         return fullShortData
 
     else:
@@ -80,7 +78,6 @@ def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
             sfBands = codingParams.sfBands
         elif blockType == START:
             mdctLine = np.zeros((halfN + shortHalfN)//2,dtype=np.float64)
-            print(f"MDCT Line:{mdctLine.shape}")
             sfBands = codingParams.transitionSfBands
         elif blockType == STOP:
             mdctLine = np.zeros((halfN + shortHalfN)//2,dtype=np.float64)
@@ -89,16 +86,12 @@ def Decode(scaleFactor,bitAlloc,mantissa,overallScaleFactor,codingParams):
         for iBand in range(sfBands.nBands):
             nLines =sfBands.nLines[iBand]
             if bitAlloc[iBand]:
-                print(vDequantize(scaleFactor[iBand], mantissa[iMant:(iMant+nLines)],codingParams.nScaleBits, bitAlloc[iBand]).shape)
-                print(mdctLine[iMant:(iMant+nLines)].shape)
-                print(nLines)
                 mdctLine[iMant:(iMant+nLines)]=vDequantize(scaleFactor[iBand], mantissa[iMant:(iMant+nLines)],codingParams.nScaleBits, bitAlloc[iBand])
             iMant += nLines
         mdctLine /= rescaleLevel  # put overall gain back to original level
 
 
         # IMDCT and window the data for this channel
-        print(blockType)
         if blockType == LONG:
             data = SineWindow( IMDCT(mdctLine, halfN, halfN) )  # takes in halfN MDCT coeffs
         elif blockType == START:
@@ -200,6 +193,7 @@ def EncodeSingleChannel(data,codingParams):
 
     if blockType == SHORT:
         num_short_blocks = (halfN // N_SHORT) * 2 - 1
+        sfBands = codingParams.shortSfBands
         
         bitBudget -= nScaleBits * num_short_blocks 
         bitBudget -= (nScaleBits + codingParams.nMantSizeBits) * sfBands.nBands * num_short_blocks
@@ -268,6 +262,10 @@ def EncodeSingleChannel(data,codingParams):
     
     else:
         # For LONG, START, STOP blocks
+        if codingParams.currBlockType == LONG:
+            sfBands = codingParams.sfBands
+        else:
+            sfBands = codingParams.transitionSfBands
         bitBudget -= nScaleBits  
         bitBudget -= (nScaleBits + codingParams.nMantSizeBits) * sfBands.nBands
 

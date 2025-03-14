@@ -217,7 +217,7 @@ class PACFile(AudioFile):
                 codingParams.currBlockType = START   # 10 = START
             elif blockType_bits == 3:
                 codingParams.currBlockType = STOP    # 11 = STOP
-            print("read block type: ", codingParams.currBlockType)
+            #print("read block type: ", codingParams.currBlockType)
             # extract the data from the PackedBits object
             if codingParams.currBlockType == SHORT:
                 # TODO: Modify the following code to loop through and read short blocks one by one
@@ -299,9 +299,9 @@ class PACFile(AudioFile):
                 # data[iCh] = np.concatenate( (data[iCh],np.add(codingParams.overlapAndAdd[iCh],decodedData[:codingParams.nMDCTLines]) ) )  # data[iCh] is overlap-and-added data
                 # codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]  # save other half for next pass
 
-            print(f"\nOverlap-and-add for block type: {codingParams.currBlockType}")
-            print(f"Previous overlap buffer size: {len(codingParams.overlapAndAdd[iCh])}")
-            print(f"Decoded data size: {len(decodedData)}")
+            #print(f"\nOverlap-and-add for block type: {codingParams.currBlockType}")
+            #print(f"Previous overlap buffer size: {len(codingParams.overlapAndAdd[iCh])}")
+            #print(f"Decoded data size: {len(decodedData)}")
             if codingParams.currBlockType == SHORT:
                 shortHalfN = N_SHORT // 2
                 num_short_blocks = ((N//2) // shortHalfN) * 2 - 1
@@ -309,6 +309,7 @@ class PACFile(AudioFile):
                 
                 # First half of the block overlaps with previous block's saved half
                 first_half_size = len(codingParams.overlapAndAdd[iCh])
+                print(f"SHORT first half: {first_half_size}")
                 data[iCh] = np.concatenate((
                     data[iCh],
                     np.add(
@@ -321,45 +322,17 @@ class PACFile(AudioFile):
                 if first_half_size < codingParams.nMDCTLines:
                     data[iCh] = np.concatenate((
                         data[iCh],
-                        decodedData[first_half_size:codingParams.nMDCTLines]
+                        decodedData[first_half_size:2 * codingParams.nMDCTLines - first_half_size]
                     ))
+                    print(f"SHORT intermediate blocks: {len(decodedData[first_half_size:2 * codingParams.nMDCTLines - first_half_size])}")
                 
                 # Save the second half for next block
-                codingParams.overlapAndAdd[iCh] = decodedData[codingParams.nMDCTLines:]
-                print(f"Saving SHORT block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
-            # if codingParams.currBlockType == SHORT:
-            #     shortHalfN = N_SHORT // 2
-                
-            #     # # Ensure overlap buffer is the right size for SHORT blocks
-            #     # if len(codingParams.overlapAndAdd[iCh]) != shortHalfN:
-            #     #     adjusted_overlap = np.zeros(shortHalfN, dtype=np.float64)
-            #     #     overlap_size = min(len(codingParams.overlapAndAdd[iCh]), shortHalfN)
-            #     #     adjusted_overlap[:overlap_size] = codingParams.overlapAndAdd[iCh][:overlap_size]
-            #     #     codingParams.overlapAndAdd[iCh] = adjusted_overlap
-                
-            #     # Overlap-add with the previous block's saved buffer
-            #     # (only the first shortHalfN samples need overlap-add)
-            #     data[iCh] = np.concatenate((
-            #         data[iCh],
-            #         np.add(
-            #             codingParams.overlapAndAdd[iCh],
-            #             decodedData[:shortHalfN]
-            #         )
-            #     ))
-                
-            #     # Add the rest of the data without overlap (it's already internally overlap-added)
-            #     if len(decodedData) > shortHalfN:
-            #         data[iCh] = np.concatenate((
-            #             data[iCh],
-            #             decodedData[shortHalfN:-shortHalfN]  # All except first and last shortHalfN
-            #         ))
-                
-            #     # Save the last shortHalfN samples for next block's overlap
-            #     codingParams.overlapAndAdd[iCh] = decodedData[-shortHalfN:].copy()
-            #     print(f"Saving SHORT block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+                codingParams.overlapAndAdd[iCh] = decodedData[2 * codingParams.nMDCTLines - first_half_size:]
+                print(f"SHORT second half: {len(decodedData[2 * codingParams.nMDCTLines - first_half_size:])}")
 
             elif codingParams.currBlockType == START:
                 halfN = codingParams.nMDCTLines
+                
                 
                 # Overlap-and-add with previous block
                 data[iCh] = np.concatenate((
@@ -369,13 +342,14 @@ class PACFile(AudioFile):
                         decodedData[:halfN]
                     )
                 ))
-                
+                print(f"START first half: {len(codingParams.overlapAndAdd[iCh])}")
                 # Save second half at SHORT block size for next overlap
                 shortHalfN = N_SHORT // 2
                 codingParams.overlapAndAdd[iCh] = np.zeros(shortHalfN, dtype=np.float64)
                 overlap_size = min(len(decodedData) - halfN, shortHalfN)
                 codingParams.overlapAndAdd[iCh][:overlap_size] = decodedData[halfN:halfN+overlap_size]
-                print(f"Saving START block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+                print(f"START second half: {len(codingParams.overlapAndAdd[iCh])}")
+                #print(f"Saving START block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
 
             elif codingParams.currBlockType == STOP:
                 # STOP blocks transition from SHORT to LONG
@@ -390,19 +364,21 @@ class PACFile(AudioFile):
                         decodedData[:len(codingParams.overlapAndAdd[iCh])]
                     )
                 ))
+                print(f"STOP first half: {len(codingParams.overlapAndAdd[iCh])}")
                 
-                # Add the rest of the first half
-                if len(codingParams.overlapAndAdd[iCh]) < halfN:
-                    data[iCh] = np.concatenate((
-                        data[iCh],
-                        decodedData[len(codingParams.overlapAndAdd[iCh]):halfN]
-                    ))
+                # # Add the rest of the first half
+                # if len(codingParams.overlapAndAdd[iCh]) < halfN:
+                #     data[iCh] = np.concatenate((
+                #         data[iCh],
+                #         decodedData[len(codingParams.overlapAndAdd[iCh]):halfN]
+                #     ))
                 
                 # Save second half at LONG block size for next overlap
                 codingParams.overlapAndAdd[iCh] = np.zeros(halfN, dtype=np.float64)
                 overlap_size = min(len(decodedData) - halfN, halfN)
                 codingParams.overlapAndAdd[iCh][:overlap_size] = decodedData[halfN:halfN+overlap_size]
-                print(f"Saving STOP block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+                print(f"STOP second half: {len(codingParams.overlapAndAdd[iCh])}")
+                #print(f"Saving STOP block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
 
             else:  # LONG block
                 halfN = codingParams.nMDCTLines
@@ -418,7 +394,7 @@ class PACFile(AudioFile):
                 
                 # Save second half for next overlap
                 codingParams.overlapAndAdd[iCh] = decodedData[halfN:]
-                print(f"Saving LONG block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
+                #print(f"Saving LONG block overlap buffer of size {len(codingParams.overlapAndAdd[iCh])}")
 
         # end loop over channels, return signed-fraction samples for this block
         return data
@@ -577,7 +553,7 @@ class PACFile(AudioFile):
             elif codingParams.currBlockType == STOP:
                 pb.WriteBits(3, 2)  # 11 = STOP
             
-            print("wrote block type: ", codingParams.currBlockType)
+            #print("wrote block type: ", codingParams.currBlockType)
 
             if codingParams.currBlockType == SHORT:
                 num_short_blocks = (N // N_SHORT) * 2 - 1
@@ -684,12 +660,12 @@ if __name__=="__main__":
         # create the audio file objects
         if Direction == "Encode":
             print( "\n\tEncoding input PCM file...",)
-            inFile= PCMFile("audio/spgm.wav")
-            outFile = PACFile("audio/spgm_128kbps.pac")
+            inFile= PCMFile("audio/castanets.wav")
+            outFile = PACFile("audio/castanets_128kbps.pac")
         else: # "Decode"
             print( "\n\tDecoding coded PAC file...",)
-            inFile = PACFile("audio/spgm_128kbps.pac")
-            outFile= PCMFile("audio/spgm_128kbps.wav")
+            inFile = PACFile("audio/castanets_128kbps.pac")
+            outFile= PCMFile("audio/castanets_128kbps.wav")
         # only difference is file names and type of AudioFile object
 
         # open input file
