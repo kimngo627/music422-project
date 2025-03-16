@@ -348,34 +348,35 @@ class PACFile(AudioFile):
 
 #-----------------------------------------------------------------------------
 
-# Testing the full PAC coder (needs a file called "input.wav" in the code directory)
-if __name__=="__main__":
+import time
+from pcmfile import * # to get access to WAV file handling
+import gzip, shutil, argparse, os
 
-    import argparse
-    parser = argparse.ArgumentParser(description="PAC coder for encoding and decoding audio files.")
-    # parser.add_argument("direction", choices=["Encode", "Decode"], help="Direction of processing: Encode or Decode")
-    parser.add_argument("--input_file", help="Input file path")
-    parser.add_argument("--entropy_coding", choices=["block", "full", None], default=None, help="Type of entropy coding to use")
-    args = parser.parse_args()
+def run_coder(input_file, entropy_coding=None, data_rate=128, output_folder=None, block_size=1024):
+    """
+    Main function to encode and decode audio files using the PAC coder
+    """
 
     print( "\nTesting the PAC coder (input.wav -> coded.pac -> output.wav):")
-    import time
-    from pcmfile import * # to get access to WAV file handling
-    import gzip, shutil
+    
     elapsed = time.time()
 
-    in_file = args.input_file
-    out_encode = in_file.replace(".wav", "_192kbps.pac")
-    in_decode = in_file.replace(".wav", "_192kbps_unzip.pac") if args.entropy_coding == 'full' else out_encode
-    out_file = in_file.replace(".wav", "_192kbps.wav")
+    if output_folder is None:
+        out_encode = input_file.replace(".wav", f"_{data_rate}kbps.pac")
+        in_decode = input_file.replace(".wav", f"_{data_rate}kbps_unzip.pac") if entropy_coding == 'full' else out_encode
+        out_file = input_file.replace(".wav", f"_{data_rate}kbps.wav")
+    else:
+        out_encode = os.path.join(output_folder, os.path.basename(input_file).replace(".wav", f"_{data_rate}kbps_{block_size}.pac"))
+        in_decode = os.path.join(output_folder, os.path.basename(input_file).replace(".wav", f"_{data_rate}kbps_unzip_{block_size}.pac")) if entropy_coding == 'full' else out_encode
+        out_file = os.path.join(output_folder, os.path.basename(input_file).replace(".wav", f"_{data_rate}kbps_{block_size}.wav"))
+
 
     for Direction in ("Encode", "Decode"):
-    # for Direction in ("Decode",):
 
         # create the audio file objects
         if Direction == "Encode":
             print( "\n\tEncoding input PCM file...",)
-            inFile= PCMFile(in_file)
+            inFile= PCMFile(input_file)
             outFile = PACFile(out_encode)
         else: # "Decode"
             print( "\n\tDecoding coded PAC file...",)
@@ -385,15 +386,14 @@ if __name__=="__main__":
 
         # open input file
         codingParams=inFile.OpenForReading()  # (includes reading header)
-
         # pass parameters to the output file
         if Direction == "Encode":
             # set additional parameters that are needed for PAC file
             # (beyond those set by the PCM file on open)
-            codingParams.nMDCTLines = 1024
+            codingParams.nMDCTLines = block_size 
             codingParams.nScaleBits = 3
             codingParams.nMantSizeBits = 5
-            codingParams.targetBitsPerSample = 2.9
+            codingParams.targetBitsPerSample = data_rate * 1000 / codingParams.sampleRate
             # tell the PCM file how large the block size is
             codingParams.nSamplesPerBlock = codingParams.nMDCTLines
         else: # "Decode"
@@ -407,12 +407,12 @@ if __name__=="__main__":
 
         # Read the input file and pass its data to the output file to be written
         while True:
-            if Direction == "Decode" and args.entropy_coding == "block":
+            if Direction == "Decode" and entropy_coding == "block":
                 data=inFile.ReadDataBlock(codingParams, entropy_block=True)
             else:
                 data=inFile.ReadDataBlock(codingParams)
             if not data: break  # we hit the end of the input file
-            if Direction == "Encode" and args.entropy_coding == "block":
+            if Direction == "Encode" and entropy_coding == "block":
                 outFile.WriteDataBlock(data,codingParams, entropy_block=True)
             else:
                 outFile.WriteDataBlock(data,codingParams)
@@ -420,17 +420,17 @@ if __name__=="__main__":
         # end loop over reading/writing the blocks
 
         # close the files
-        if Direction == "Decode" and args.entropy_coding == "block":
+        if Direction == "Decode" and entropy_coding == "block":
             inFile.Close(codingParams, entropy_block=True)
         else:
             inFile.Close(codingParams)
         
-        if Direction == "Encode" and args.entropy_coding == "block":
+        if Direction == "Encode" and entropy_coding == "block":
             outFile.Close(codingParams, entropy_block=True)
         else:
             outFile.Close(codingParams)
 
-        if Direction == "Encode" and args.entropy_coding == "full":
+        if Direction == "Encode" and entropy_coding == "full":
             # entropy encoding 
             with open(out_encode, 'rb') as f_in, gzip.open(out_encode + '.gz', 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
@@ -443,3 +443,16 @@ if __name__=="__main__":
     elapsed = time.time()-elapsed
     print( "\nDone with Encode/Decode test\n")
     print( elapsed ," seconds elapsed")
+
+
+# Testing the full PAC coder (needs a file called "input.wav" in the code directory)
+if __name__=="__main__":
+    parser = argparse.ArgumentParser(description="PAC coder for encoding and decoding audio files.")
+    # parser.add_argument("direction", choices=["Encode", "Decode"], help="Direction of processing: Encode or Decode")
+    parser.add_argument("--input_file", help="Input file path")
+    parser.add_argument("--entropy_coding", choices=["block", "full", None], default=None, help="Type of entropy coding to use")
+    parser.add_argument("--data_rate", default=128, type=int, help="Target data rate in kbps")
+    parser.add_argument("--block_size", default=1024, type=int, help="Block size encoding")
+    args = parser.parse_args()
+
+    run_coder(args.input_file, entropy_coding=args.entropy_coding, data_rate=args.data_rate, block_size=args.block_size)
