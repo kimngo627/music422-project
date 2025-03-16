@@ -362,9 +362,9 @@ def run_coder(input_file, entropy_coding=None, data_rate=128, output_folder=None
     elapsed = time.time()
 
     if output_folder is None:
-        out_encode = input_file.replace(".wav", f"_{data_rate}kbps.pac")
-        in_decode = input_file.replace(".wav", f"_{data_rate}kbps_unzip.pac") if entropy_coding == 'full' else out_encode
-        out_file = input_file.replace(".wav", f"_{data_rate}kbps.wav")
+        out_encode = input_file.replace(".wav", f"_{data_rate}kbps_{block_size}.pac")
+        in_decode = input_file.replace(".wav", f"_{data_rate}kbps_unzip_{block_size}.pac") if entropy_coding == 'full' else out_encode
+        out_file = input_file.replace(".wav", f"_{data_rate}kbps_{block_size}.wav")
     else:
         out_encode = os.path.join(output_folder, os.path.basename(input_file).replace(".wav", f"_{data_rate}kbps_{block_size}.pac"))
         in_decode = os.path.join(output_folder, os.path.basename(input_file).replace(".wav", f"_{data_rate}kbps_unzip_{block_size}.pac")) if entropy_coding == 'full' else out_encode
